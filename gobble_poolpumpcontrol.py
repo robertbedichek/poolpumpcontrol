@@ -27,7 +27,7 @@ SSH_COMMAND = [
     "cat >> /var/www/home/poolpumpcontrol.txt"
 ]
 
-// port = "/dev/tty.usbserial-11440"
+port = "/dev/tty.usbserial-211440"
 baud_rate = 115200
 
 ser = serial.Serial(port, baud_rate, timeout=1)
@@ -43,9 +43,9 @@ def is_valid_data_line(line):
         return True  # Comment line is always OK
 
     parts = line.strip().split()
-    if len(parts) < 14:
-        print("must have at least 14 fields: ", line, " but has only ", len(parts))
-        return False  # Must have at least 14 fields
+    if len(parts) < 3:
+        print("must have at least 3 fields: ", line, " but has only ", len(parts))
+        return False  # Must have at least 3 fields
 
     try:
         # Try to parse the timestamp fields

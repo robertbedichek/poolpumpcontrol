@@ -713,12 +713,22 @@ void read_time_and_sensor_inputs_callback()
   // Convert Centigrade to Fahrenheit
   pool_temperature_F = pool_temperature_C * 9.0 / 5.0 + 32.0;
 
+  if (pool_temperature_F < 32.0 || pool_temperature_F > 105.0) {
+    // Something is wrong with the sensor
+    pool_temperature_F = 0;
+  }
+
   float outside_temperature_millivolts = (float)raw_outside_temperature_volts * 5000.0 / 1023.0;
   float outside_temperature_C = (outside_temperature_millivolts - 500.0) / 10.0;
 
   // Convert to degrees F
   outside_temperature_F = outside_temperature_C * 9.0 / 5.0 + 32.0;
+
+  if (outside_temperature_F < 0.0 || outside_temperature_F > 150.0) {
+    outside_temperature_F = 0;
+  }
   pool_pressure_volts = raw_pressure_volts * 5.0 / 1023.0;
+  pool_pressure_volts -= 0.29;   // Pressure sensor reads 0.29 volts when pressure is zero
   check_free_memory(F("read_time_and.. exit"));
 }
 
@@ -745,7 +755,7 @@ void print_status_to_serial_callback(void)
       main_pump != last_main_pump ||
       sweep_pump != last_sweep_pump ||
       to_roof != last_to_roof ||
-      skipped_record_counter++ > 10) {
+      skipped_record_counter++ > 100) {
    last_pool_temperature_F = pool_temperature_F;
    last_pool_pressure_volts = pool_pressure_volts;
    last_main_pump = main_pump;
