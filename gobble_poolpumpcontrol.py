@@ -43,8 +43,8 @@ def is_valid_data_line(line):
         return True  # Comment line is always OK
 
     parts = line.strip().split()
-    if len(parts) < 3:
-        print("must have at least 3 fields: ", line, " but has only ", len(parts))
+    if len(parts) < 10:
+        print("must have at least 10 fields: ", line, " but has only ", len(parts))
         return False  # Must have at least 3 fields
 
     try:
@@ -53,13 +53,13 @@ def is_valid_data_line(line):
         from datetime import datetime
         datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
 
-        # Try to parse all 12 remaining fields as integers
+        # Try to parse all 8 remaining fields as floats
         for val in parts[2:]:
             float(val)
 
         return True
     except Exception:
-        print("Unable to parse date/time field: " + line)
+        print("Unable to parse date/time field or remaining fields: " + line)
         return False
 
 # Read and validate lines
