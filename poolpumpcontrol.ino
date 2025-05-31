@@ -63,9 +63,9 @@ const bool fast_lcd_comm = false;
 /*
    Counts down when the backlight is on.  When it is zero, we turn the backlight off.  Units are seconds.
 */
-unsigned long backlight_timer;            
+// unsigned long backlight_timer;            
 
-#define BACKLIGHT_ON_TIME (600) 
+// #define BACKLIGHT_ON_TIME (600) 
 
 #define POOL_TEMPERATURE1_INPUT   (A0)     // 0-5VDC LM36 that is immersed in pool water, about 1' deep under diving board
 #define POOL_TEMPERATURE2_INPUT   (A1)     // A second LM36 in the same probe, for redundancy
@@ -100,16 +100,18 @@ typedef enum {m_normal, m_safe, m_main_pump, m_24vac, m_diverter, m_last} operat
 bool toggle_key_pressed = false;
 
 void read_time_and_sensor_inputs_callback(void);
-void monitor_lcd_backlight_callback(void);
+// void monitor_lcd_backlight_callback(void);
 void print_status_to_serial_callback(void);
 void poll_keys_callback(void);
 void update_lcd_callback(void);
 
-void main_pump_control_callback(void);
+void monitor_pump_callback(void);
+//-------------------------------------------------------------------------------------
+const unsigned long drain_down_time = 120 * 1000UL;
 
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
-void diverter_valve_control_callback(void);
+void monitor_diverter_valve_callback(void);
 void monitor_diag_mode_callback(void);
 void monitor_serial_console_callback(void);
 void process_pressed_keys_callback(void);
@@ -125,7 +127,7 @@ const unsigned long max_diverter_power_on_time = 300 * 1000; // 5 minutes
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
 unsigned long diverter_valve_in_roof_position_time; // Assigned millis() when valve goes to send-to-roof position
 
-Task main_pump_control(TASK_SECOND, TASK_FOREVER, &main_pump_control_callback, &ts, true);
+Task monitor_pump_control(TASK_SECOND, TASK_FOREVER, &monitor_pump_callback, &ts, true);
 operating_mode_t operating_mode;
 
 unsigned long time_entering_diag_mode;  // Assigned millisIO when any diag mode is entered
@@ -135,7 +137,7 @@ Task monitor_diag_mode(TASK_SECOND * 60, TASK_FOREVER, &monitor_diag_mode_callba
 
 Task monitor_serial_console(TASK_SECOND, TASK_FOREVER, &monitor_serial_console_callback, &ts, true);
 
-Task diverter_valve_control(TASK_SECOND * 6, TASK_FOREVER, &diverter_valve_control_callback, &ts, true);
+Task monitor_diverter_control(TASK_SECOND * 6, TASK_FOREVER, &monitor_diverter_valve_callback, &ts, true);
 
 float pool_temperature1_F = 0.0;
 float pool_temperature2_F = 0.0;
@@ -185,7 +187,7 @@ Task print_status_to_serial(TASK_SECOND, TASK_FOREVER, &print_status_to_serial_c
 // Update slightly faster than once per second so that the LCD time advances regularly in a way that 
 // looks normal to humans (i.e., make sure that the seconds display counts up once per second).
 // We depend on this being called about once per second and being enabled at boot time.
-Task monitor_lcd_backlight(TASK_SECOND, TASK_FOREVER, &monitor_lcd_backlight_callback, &ts, true);
+// Task monitor_lcd_backlight(TASK_SECOND, TASK_FOREVER, &monitor_lcd_backlight_callback, &ts, true);
 Task update_lcd(900, TASK_FOREVER, &update_lcd_callback, &ts, true);
 /*****************************************************************************************************/
 
@@ -263,20 +265,20 @@ void monitor_diag_mode_callback(void)
    Called every second the backlight is on and turns off the backlight, and disables itself, when the backlight timer
    has counted down to zero.
 */
-void monitor_lcd_backlight_callback(void) 
-{
-  if (backlight_timer > 0 && (operating_mode == m_normal || operating_mode == m_safe)) {
-    backlight_timer--;
-    if (backlight_timer == 0) {
-      delay(50);
-      lcd->clear(); // Changing the backlight scrambles the display, so clear it and let it be refreshed in update_lcd
-      delay(50);
-      lcd->setBacklight(0, 0, 0);
-      delay(50);
-      monitor_lcd_backlight.disable();
-    }
-  }
-}
+// void monitor_lcd_backlight_callback(void) 
+// {
+//   if (backlight_timer > 0 && (operating_mode == m_normal || operating_mode == m_safe)) {
+//     backlight_timer--;
+//     if (backlight_timer == 0) {
+//       delay(50);
+//       lcd->clear(); // Changing the backlight scrambles the display, so clear it and let it be refreshed in update_lcd
+//       delay(50);
+//       lcd->setBacklight(0, 0, 0);
+//       delay(50);
+//       monitor_lcd_backlight.disable();
+//     }
+//   }
+// }
 
 // This is only called if we have compiled with the option to poll keys (and not use interrupts
 // to detect key status changes).
@@ -390,82 +392,81 @@ void process_pressed_keys_callback(void)
     minus_key_pressed = false;
   }
   
-  static bool last_red_button_pressed;
-  static bool last_timer_switch_closed;
-  static bool last_diverter_valve_request;
-  
-  bool red_button_pressed = digitalRead(RED_BUTTON_INPUT_PIN) == LOW;
-  
-  if (red_button_pressed != last_red_button_pressed) { // Button state changed
-    static unsigned long last_red_button_press_time;
-    unsigned long now = millis();
+  if (operating_mode == m_normal) {
+    static bool last_red_button_pressed;
+    static bool last_timer_switch_closed;
+    static bool last_diverter_valve_request;
+    
+    bool red_button_pressed = digitalRead(RED_BUTTON_INPUT_PIN) == LOW;
+    
+    if (red_button_pressed != last_red_button_pressed) { // Button state changed
+      static unsigned long last_red_button_press_time;
+      unsigned long now = millis();
 
-    if ((now - last_red_button_press_time) > debounce_delay) {
-      some_key_pressed = true;
-      if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
-        if (main_pump_is_on()) {
-          Serial.println(F("# Pool pump is on, turning it off"));
-          turn_main_pump_off();
-        } else {
-          Serial.println(F("# Pool pump is off, turning it on"));
-          turn_main_pump_on();
+      if ((now - last_red_button_press_time) > debounce_delay) {
+        some_key_pressed = true;
+        if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
+          if (main_pump_is_on()) {
+            Serial.println(F("# Pool pump is on, turning it off"));
+            turn_main_pump_off();
+          } else {
+            Serial.println(F("# Pool pump is off, turning it on"));
+            turn_main_pump_on();
+          }
         }
       }
+      last_red_button_pressed = red_button_pressed;
+      last_red_button_press_time = now;
     }
-    last_red_button_pressed = red_button_pressed;
-    last_red_button_press_time = now;
-  }
-  timer_switch_closed = digitalRead(TIMER_SWITCH_INPUT_PIN) == LOW;
-  if (timer_switch_closed != last_timer_switch_closed) { // Button state changed
-    static unsigned long timer_switch_closed_time;
+    timer_switch_closed = digitalRead(TIMER_SWITCH_INPUT_PIN) == LOW;
+    if (timer_switch_closed != last_timer_switch_closed) { // Button state changed
+      static unsigned long timer_switch_closed_time;
 
-    if ((millis() - timer_switch_closed_time) > debounce_delay) {
-      if (timer_switch_closed) { // While timer switch is closed, run main pump
-        some_key_pressed = true;
-        if (main_pump_is_on() == false) {
-          Serial.println(F("# Main pump is off, turn it on due to timer switch request"));
-          turn_main_pump_on();
-          if (diverter_valve_is_sending_water_to_roof() == false) {
-            // To actually make the diverter valve turn, one must call
-            turn_diverter_valve_transformer_on();
-            set_diverter_valve_to_send_water_to_roof();
-          }
-        } 
-      } else {
-        if (main_pump_is_on() && 
-           diverter_valve_is_sending_water_to_roof() == false && 
-           diverter_valve_request == false) {
-          Serial.println(F("# Main pump is on, turn it off due to timer switch removing request"));
-          turn_main_pump_off();
+      if ((millis() - timer_switch_closed_time) > debounce_delay) {
+        if (timer_switch_closed) { // While timer switch is closed, run main pump
+          some_key_pressed = true;
+          if (main_pump_is_on() == false) {
+            Serial.println(F("# Main pump is off, turn it on due to timer switch request"));
+            turn_main_pump_on();
+            if (diverter_valve_is_sending_water_to_roof() == false) {
+              // To actually make the diverter valve turn, one must call
+              turn_diverter_valve_transformer_on();
+              set_diverter_valve_to_send_water_to_roof();
+            }
+          } 
         } else {
-          // Logic in monitor_diverter_valve() will turn the diverter valve back to pool-mode
+          // Logic in monitor_diverter_valve will turn the diverter valve back to pool-mode
           // after a drain-down time.
-        } 
+          // Logic in monitor_pool_pump will turn off the main pump
+          
+        }
       }
+      last_timer_switch_closed = timer_switch_closed;
+      timer_switch_closed_time = millis();
     }
-    last_timer_switch_closed = timer_switch_closed;
-    timer_switch_closed_time = millis();
-  }
-  diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
-  if (diverter_valve_request != last_diverter_valve_request) {
-    last_diverter_valve_request = diverter_valve_request;
-    static unsigned long last_diverter_valve_request_time;
+    diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
+    if (diverter_valve_request != last_diverter_valve_request) {
+      last_diverter_valve_request = diverter_valve_request;
+      static unsigned long last_diverter_valve_request_time;
 
-    if ((millis() - last_diverter_valve_request_time) > debounce_delay) {
-      some_key_pressed = true;
-      if (diverter_valve_request) {
-        turn_diverter_valve_transformer_on();
-        set_diverter_valve_to_send_water_to_roof();
-        turn_main_pump_on();
-        Serial.println(F("# diverter request present"));
-      } else {
-        // Logic in monitor_diverter_valve() will turn the main pump if it should be off and
-        // change the diverter valve back to pool-mode after a drain-down time.
+      if ((millis() - last_diverter_valve_request_time) > debounce_delay) {
+        some_key_pressed = true;
+        if (diverter_valve_request) {
+          turn_diverter_valve_transformer_on();
+          set_diverter_valve_to_send_water_to_roof();
+          turn_main_pump_on();
+          Serial.println(F("# diverter request present"));
+        } else {
+          // Logic in monitor_diverter_valve() will turn the main pump if it should be off and
+          // change the diverter valve back to pool-mode after a drain-down time.
+          // Logic in monitor_pool_pump will turn off the main pump (there may be several reasons for it 
+          // needing to stay on)
+        }
       }
     }
   }
   if (some_key_pressed) {
-    backlight_timer = BACKLIGHT_ON_TIME;
+//    backlight_timer = BACKLIGHT_ON_TIME;
 
     if (operating_mode == m_normal || operating_mode == m_safe) {
       monitor_diag_mode.disable();
@@ -489,10 +490,12 @@ void turn_main_pump_on(void)
 
 void turn_main_pump_off(void)
 {
-  quad_lv_relay->turnRelayOff(LV_RELAY_MAIN_PUMP_12V);
-  main_pump_on_off_time = millis();
-  Serial.print(F("# Starting pump on-off time timer: "));
+  if (main_pump_is_on()) {
+    quad_lv_relay->turnRelayOff(LV_RELAY_MAIN_PUMP_12V);
+    main_pump_on_off_time = millis();
+    Serial.print(F("# Starting pump on-off time timer: "));
     Serial.println(main_pump_on_off_time);
+  }
 }
 
 bool main_pump_is_on(void)
@@ -554,10 +557,30 @@ void set_diverter_valve_to_return_water_to_pool(void)
 }
 const unsigned long max_pump_on_time = 5 * 3600 * 1000UL;
 
-void main_pump_control_callback(void)
+// Filter the water for more time the warmer the water is.  Do this by 
+// adjusing the start time.
+
+bool time_of_day_to_filter(void)
 {
-  check_free_memory(F("main_pump_control"));
-  if (main_pump_is_on()) { // Pump is on
+  unsigned start_hour;
+  unsigned h = hour(arduino_time);
+  if (pool_temperature_F < 80) {
+    start_hour = 17;
+  } else if (pool_temperature_F < 90) {
+    start_hour = 16;
+  } else {
+    start_hour = 15;
+  }
+  return (h >= start_hour && h < 20);
+}
+
+void monitor_pump_callback(void)
+{
+  // Only turn the pump on once per day to do a filter water.  Otherwise, one could have
+  // odd behavior where the pump kept turning back on during filter-clean hours
+  static bool pump_started_due_to_time_of_day = false;
+  check_free_memory(F("monitor_pump"));
+  if (main_pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
     
     if ((millis() - main_pump_on_off_time) > max_pump_on_time) {
       // Turn off the pump
@@ -568,52 +591,54 @@ void main_pump_control_callback(void)
 
     if (pressure_psi > max_psi) {
       turn_main_pump_off();
-      Serial.print(F("# alert turning off pool pump due to overpressure: PSI="));
+      Serial.print(F("# alert turning off pump due to overpressure: PSI="));
       Serial.println(pressure_psi);
     }
 
     if (hour(arduino_time) == 20 && timer_switch_closed == false) {
       turn_main_pump_off();
-      Serial.print(F("# alert turning off pool pump due time of day"));
+      Serial.print(F("#  turning off pump due time of day"));
+    }
+
+    if (timer_switch_closed && diverter_valve_request == false && !time_of_day_to_filter()) {
+      turn_main_pump_off();
+      Serial.print(F("# turning off pump due to lack of timer switch and diverter valve requests"));
     }
   } else {
-    // Run the main pump ever day starting at 2PM
-    unsigned start_hour;
-    if (pool_temperature_F < 80) {
-      start_hour = 17;
-    } else if (pool_temperature_F < 90) {
-      start_hour = 16;
-    } else {
-      start_hour = 15;
-    }
-    if (hour(arduino_time) == start_hour && main_pump_is_on() == false) {
+    
+    if (time_of_day_to_filter() && !main_pump_is_on() && !pump_started_due_to_time_of_day) {
       turn_main_pump_on();
+      pump_started_due_to_time_of_day = true;
+      Serial.print(F("# starting pump due to time of day"));
     }
   }
-  check_free_memory(F("main_pump_control exit"));
+  if (pump_started_due_to_time_of_day && hour(arduino_time) > 20) {
+    pump_started_due_to_time_of_day = false;
+  }
+  check_free_memory(F("monitor_pump exit"));
 }
 
-const unsigned long drain_down_time = 120 * 1000UL;
-
-void diverter_valve_control_callback(void)
+void monitor_diverter_valve_callback(void)
 {
-  check_free_memory(F("diverter_valve_control"));
-  // If the main pump has been off for two minutes and the diverter valve is set to send
-  // water to the roof, we assume that the panels have had time to drain and we
-  // turn the diverter valve back to pool mode
-  if (main_pump_is_on() == false && diverter_valve_is_sending_water_to_roof()) {
-    if ((main_pump_on_off_time - millis()) > drain_down_time) {
-      turn_diverter_valve_transformer_on();
-      set_diverter_valve_to_return_water_to_pool();
+  check_free_memory(F("monitor_diverter_valve"));
+  if (operating_mode == m_normal) {
+    // If the main pump has been off for two minutes and the diverter valve is set to send
+    // water to the roof, we assume that the panels have had time to drain and we
+    // turn the diverter valve back to pool mode
+    if (main_pump_is_on() == false && diverter_valve_is_sending_water_to_roof()) {
+      if ((main_pump_on_off_time - millis()) > drain_down_time) {
+        turn_diverter_valve_transformer_on();
+        set_diverter_valve_to_return_water_to_pool();
+      }
+    }
+    if (diverter_valve_transformer_is_on()) {
+      if ((millis() - diverter_valve_transformer_on_time) > max_diverter_power_on_time) {
+        turn_diverter_valve_transformer_off();
+        Serial.println(F("# turning off diverter valve power due to time limit"));
+      }
     }
   }
-  if (diverter_valve_transformer_is_on() && operating_mode == m_normal) {
-    if ((millis() - diverter_valve_transformer_on_time) > max_diverter_power_on_time) {
-      turn_diverter_valve_transformer_off();
-      Serial.println(F("# turning off diverter valve power due to time limit"));
-    }
-  }
-  check_free_memory(F("diverter_valve_control exit"));
+  check_free_memory(F("monitor_diverter_valve exit"));
 }
 
 // This is called several times a second and updates the LCD display with the latest values and status.
@@ -628,15 +653,15 @@ void update_lcd_callback(void)
     // In the case we find that the backlight monitor task is not enabled, but the counter is non zero we enable 
     // the backlight monitor task and turn on the backlight.
     
-    if (backlight_timer > 0 && !monitor_lcd_backlight.isEnabled()) {
-      delay(50);
-      lcd->setBacklight(255, 255, 255); 
-      delay(50);
-      lcd->clear(); // setBacklight scrambles the display, so clear it now to avoid junk that hangs around
-                    // on the unwritten parts of the display
-      delay(50);
-      monitor_lcd_backlight.enable();
-    }
+    // if (backlight_timer > 0 && !monitor_lcd_backlight.isEnabled()) {
+    //   delay(50);
+    //   lcd->setBacklight(255, 255, 255); 
+    //   delay(50);
+    //   lcd->clear(); // setBacklight scrambles the display, so clear it now to avoid junk that hangs around
+    //                 // on the unwritten parts of the display
+    //   delay(50);
+    //   monitor_lcd_backlight.enable();
+    // }
     
     char *valve_cbuf;
     
@@ -957,7 +982,7 @@ void setup_lcd(void)
     
     lcd->setCursor(0, 2);
     lcd->print(F(__TIME__));         // Display this on the third row, left-adjusted
-    backlight_timer = BACKLIGHT_ON_TIME;
+//    backlight_timer = BACKLIGHT_ON_TIME;
   }
 }
 
