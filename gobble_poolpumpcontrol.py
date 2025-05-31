@@ -22,7 +22,7 @@ with open(user_token_path, "r") as f:
 
 SSH_COMMAND = [
     "/usr/bin/env", "ssh",
-    "-i", "/Users/robertbedichek/.ssh/id_rsa",
+    "-i", os.path.expanduser('~/.ssh/id_rsa'),
     "root@bedichek.org",
     "cat >> /var/www/home/poolpumpcontrol.txt"
 ]
