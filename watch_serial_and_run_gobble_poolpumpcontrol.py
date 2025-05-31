@@ -7,7 +7,7 @@ import serial
 import errno
 
 DEVICE = "/dev/tty.usbserial-211440"
-SCRIPT = "/Users/robertbedichek/bin/gobble_poolpumpcontrol.py"
+SCRIPT = os.path.expanduser('~/bin/gobble_poolpumpcontrol.py')
 CHECK_INTERVAL = 60  # seconds
 
 
