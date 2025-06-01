@@ -9,7 +9,7 @@ import time
 import subprocess
 import os
 import requests
-
+from datetime import datetime
 home_dir = os.path.expanduser("~")
 app_token_path = os.path.join(home_dir, ".pushover", "ap_token.txt")
 user_token_path = os.path.join(home_dir, ".pushover", "user_token.txt")
@@ -50,7 +50,6 @@ def is_valid_data_line(line):
     try:
         # Try to parse the timestamp fields
         date_part, time_part = parts[0], parts[1]
-        from datetime import datetime
         datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
 
         # Try to parse all 8 remaining fields as floats
@@ -68,7 +67,7 @@ def is_valid_data_line(line):
 #         if not is_valid_data_line(line):
 #             print(f"Malformed line {i}: {line.strip()}")
 
-print(f"Connected to {port}. Reading data...\n")
+print(f"Connected to {port}. Reading data.. \n")
 
 try:
   while True:
@@ -78,6 +77,12 @@ try:
       print("⚠️  Corrupted data skipped:", line)
       line = ""
     if line and is_valid_data_line(line):
+      # After reading the first data line from the Arduino, send it a command to set its time
+      # and do this every 1000 lines we receive from the Arduino
+      if (linecount % 1000) == 0:
+        timestamp = f"t {datetime.now():%H:%M:%S}"
+        ser.write((timestamp + '\n').encode())
+
       linecount = linecount + 1
       if "alert" in line.lower():
         data = {
