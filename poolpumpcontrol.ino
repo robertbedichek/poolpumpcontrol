@@ -27,14 +27,6 @@ const bool verbose_I2C = true;
 
 #include <PinChangeInterrupt.h>
 
-const int button_pins[6] = {7, 8, 9, 10, 11, 12};
-
-#define BUTTON_RED    (0)
-#define TIMER_SWITCH  (1)
-#define BUTTON_MINUS  (2)
-#define BUTTON_PLUS   (3)
-#define BUTTON_ENTER  (4)
-#define BUTTON_SELECT (5)
 
 /*
  * Low voltage relay bank.  Relays 1 and 2 control the power to inlet valve motors.
@@ -86,6 +78,16 @@ const bool fast_lcd_comm = false;
 #define RED_BUTTON_INPUT_PIN       (7)  // Simple momemtary contact push button
 #define DIVERTER_REQUEST_INPUT_PIN (5)  // Fed by an optoisolator
 
+const int button_pins[6] = {RED_BUTTON_INPUT_PIN, TIMER_SWITCH_INPUT_PIN, KEY_4_PIN, KEY_3_PIN, KEY_2_PIN, KEY_1_PIN};
+
+// These are indicies into the button_pins array
+#define BUTTON_RED    (0)
+#define TIMER_SWITCH  (1)
+#define BUTTON_MINUS  (2)
+#define BUTTON_PLUS   (3)
+#define BUTTON_ENTER  (4)
+#define BUTTON_SELECT (5)
+
 #define _TASK_SLEEP_ON_IDLE_RUN
 #include <TaskScheduler.h>
 
@@ -99,6 +101,8 @@ typedef enum {m_normal, m_safe, m_pump, m_24vac, m_diverter, m_last} operating_m
 
 bool toggle_key_pressed = false;
 
+bool date_set;
+bool time_set;
 void read_time_and_sensor_inputs_callback(void);
 // void monitor_lcd_backlight_callback(void);
 void print_status_to_serial_callback(void);
@@ -204,7 +208,7 @@ int free_memory() {
 }
 
 // Flag a warning if there are fewer than this number of bytes of free memory.
-#define LOW_MEMORY_LIMIT (200)
+#define LOW_MEMORY_LIMIT (400)
 
 // This will be overwritten on the first call to "check_free_memory(F("..."));".  It
 // records the smallest number of bytes of free memory
@@ -612,7 +616,7 @@ void monitor_pump_callback(void)
       // by running the pump, then turn it off.
       if (!timer_switch_on && !time_of_day_to_filter()) {
         turn_pump_off();
-        Serial.print(F("# turning off pump due to lack of timer switch and diverter valve requests"));
+        Serial.println(F("# turning off pump due to lack of timer switch and diverter valve requests"));
       } else {
         if (diverter_valve_is_sending_water_to_pool()) {
           // Although we have other reasons to run the pump, we need to turn it off to let the panels
@@ -944,6 +948,7 @@ void monitor_serial_console_callback(void)
           int year, month, day;
           sscanf(command_buf + 2, "%d-%d-%d", &year, &month, &day);
           setTime(hour(arduino_time), minute(arduino_time), second(arduino_time), day, month, year);
+          date_set = true;
         }
         break; 
 
@@ -952,6 +957,7 @@ void monitor_serial_console_callback(void)
           int hh, mmin, ss;
           sscanf(command_buf + 2, "%d:%d:%d", &hh, &mmin, &ss);
           setTime(hh, mmin, ss, day(arduino_time), month(arduino_time), year(arduino_time));
+          time_set = true;
         }
         break;
 
@@ -1021,10 +1027,10 @@ void setup_arduino_pins(void)
   pinMode(LED_BUILTIN, OUTPUT); 
   pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP);
 
-  pinMode(2, INPUT_PULLUP);
+  pinMode(2, INPUT_PULLUP); // Give unconnected pins a pull up resistor so that they don't cause spurious interrupts or waste power
   pinMode(3, INPUT_PULLUP);
   pinMode(4, INPUT_PULLUP);
-  pinMode(5, INPUT_PULLUP);
+  pinMode(6, INPUT_PULLUP);
 }
 
 void setup_i2c_bus(void)
@@ -1148,17 +1154,23 @@ void setup(void)
 {
   setup_arduino_pins();
   analogReference(DEFAULT);
-  setup_arduino_time();
-  
+  if (!date_set && !time_set) {
+    setup_arduino_time();
+  }
+
   Wire.begin();
-  Wire.setClock(400000); 
+//  Wire.setClock(400000); 
 
   Serial.begin(SERIAL_BAUD);
   UCSR0A = UCSR0A | (1 << TXC0); //Clear Transmit Complete Flag
   Serial.println(F("# Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
   
   setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
+//  Serial.println(F("# About to setup LCD"));
+  delay(100);
   setup_lcd();
+  delay(100);
+//  Serial.println(F("# almost done with setup"));
 
   // If we start with the diverter valve direction relay in the position for sending water to roof, but there is no request for this
   // then ensure that the diverter valve is sending water back to the pool.
