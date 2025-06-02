@@ -10,6 +10,8 @@ import subprocess
 import os
 import requests
 from datetime import datetime
+from datetime import date
+
 home_dir = os.path.expanduser("~")
 app_token_path = os.path.join(home_dir, ".pushover", "ap_token.txt")
 user_token_path = os.path.join(home_dir, ".pushover", "user_token.txt")
@@ -82,6 +84,8 @@ try:
       if (linecount % 1000) == 0:
         timestamp = f"t {datetime.now():%H:%M:%S}"
         ser.write((timestamp + '\n').encode())
+        datestamp = 'd ' + date.today().strftime('%Y-%m-%d')
+        ser.write((datestamp + '\n').encode())
 
       linecount = linecount + 1
       if "alert" in line.lower():
