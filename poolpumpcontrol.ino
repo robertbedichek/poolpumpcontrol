@@ -124,7 +124,8 @@ void process_pressed_keys_callback(void);
 char cbuf[60];
 
 /*****************************************************************************************************/
-  
+
+bool manual_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long pump_on_off_time;        // Assigned millis() when main pump is switched on
 const unsigned long max_diverter_power_on_time = 300 * 1000; // 5 minutes
 
@@ -339,11 +340,12 @@ void process_pressed_keys_callback(void)
   if (plus_key_pressed) {
     switch (operating_mode) {
       case m_normal:
-      case m_safe:
+      case m_safe: // Move time forward 10 minutes for each press of the plus key
         adjustTime(600);
         break;
 
       case m_pump:
+        manual_pump_request = true;
         turn_pump_on();
         Serial.print(F("# main pump="));
         Serial.println(pump_is_on());
@@ -373,6 +375,7 @@ void process_pressed_keys_callback(void)
         break;
 
       case m_pump:
+        manual_pump_request = false;
         turn_pump_off();
         Serial.print(F("# main pump="));
         Serial.println(pump_is_on());
@@ -411,9 +414,11 @@ void process_pressed_keys_callback(void)
         some_key_pressed = true;
         if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
           if (pump_is_on()) {
+            manual_pump_request = false;
             Serial.println(F("# Pool pump is on, turning it off"));
             turn_pump_off();
           } else {
+            manual_pump_request = false;
             Serial.println(F("# Pool pump is off, turning it on"));
             turn_pump_on();
           }
@@ -614,7 +619,7 @@ void monitor_pump_callback(void)
       // If we are not being asked to send water to the roof, the pool-cleaner timer switch
       // is not requesting pool cleaning, and this is not the time to filter the pool water
       // by running the pump, then turn it off.
-      if (!timer_switch_on && !time_of_day_to_filter()) {
+      if (!timer_switch_on && !time_of_day_to_filter() && !manual_pump_request) {
         turn_pump_off();
         Serial.println(F("# turning off pump due to lack of timer switch and diverter valve requests"));
       } else {
