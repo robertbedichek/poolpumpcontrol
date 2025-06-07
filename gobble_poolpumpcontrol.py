@@ -16,6 +16,7 @@ home_dir = os.path.expanduser("~")
 app_token_path = os.path.join(home_dir, ".pushover", "ap_token.txt")
 user_token_path = os.path.join(home_dir, ".pushover", "user_token.txt")
 
+
 with open(app_token_path, "r") as f:
     app_token = f.read().strip()
 
@@ -49,19 +50,46 @@ def is_valid_data_line(line):
         print("must have at least 10 fields: ", line, " but has only ", len(parts))
         return False  # Must have at least 3 fields
 
+    # Assume 'parts' is a list like ['2025-06-06', '12:34:56'] from Arduino input
+    date_part, time_part = parts[0], parts[1]
+
     try:
-        # Try to parse the timestamp fields
-        date_part, time_part = parts[0], parts[1]
-        datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
+      # Parse target time
+      target_dt = datetime.strptime(f"{date_part} {time_part}", "%Y-%m-%d %H:%M:%S")
+    
+      # Get current system time
+      system_dt = datetime.now()
+
+      # Calculate the absolute difference in seconds
+      delta = abs((system_dt - target_dt).total_seconds())
+
+      # If more than 5 minutes, send correction
+      if delta > 300:
+        print("Target time is off by more than 5 minutes. Sending correction...")
+
+        # Send time command
+        timestamp = f"t {system_dt:%H:%M:%S}"
+        ser.write((timestamp + '\n').encode())
+
+        # Send date command
+        datestamp = 'd ' + date.today().strftime('%Y-%m-%d')
+        ser.write((datestamp + '\n').encode())
+      else:
+#        print("Target time is within acceptable range.")
 
         # Try to parse all 8 remaining fields as floats
         for val in parts[2:]:
             float(val)
 
         return True
+
+    except ValueError:
+      print("Invalid date/time received from Arduino.")
+      return False
+
     except Exception:
-        print("Unable to parse date/time field or remaining fields: " + line)
-        return False
+      print("Unable to parse date/time field or remaining fields: " + line)
+      return False
 
 # Read and validate lines
 # with open("solar_data.txt") as f:
@@ -81,11 +109,11 @@ try:
     if line and is_valid_data_line(line):
       # After reading the first data line from the Arduino, send it a command to set its time
       # and do this every 1000 lines we receive from the Arduino
-      if (linecount % 1000) == 0:
-        timestamp = f"t {datetime.now():%H:%M:%S}"
-        ser.write((timestamp + '\n').encode())
-        datestamp = 'd ' + date.today().strftime('%Y-%m-%d')
-        ser.write((datestamp + '\n').encode())
+#      if (linecount % 1000) == 0:
+#        timestamp = f"t {datetime.now():%H:%M:%S}"
+#        ser.write((timestamp + '\n').encode())
+#        datestamp = 'd ' + date.today().strftime('%Y-%m-%d')
+#        ser.write((datestamp + '\n').encode())
 
       linecount = linecount + 1
       if "alert" in line.lower():
