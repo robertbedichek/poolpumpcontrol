@@ -25,9 +25,6 @@ const bool verbose_I2C = true;
  */
 #include <Wire.h>
 
-#include <PinChangeInterrupt.h>
-
-
 /*
  * Low voltage relay bank.  Relays 1 and 2 control the power to inlet valve motors.
  * Relay 3 and 4 control the power to the outlet valve.
@@ -39,12 +36,10 @@ const bool verbose_I2C = true;
 #include "SparkFun_Qwiic_Relay.h"
 #define LV_RELAY_I2C_ADDR  (0x6D)                 // Default I2C address of the mechanical, low voltage, 4-relay board
 
-#define LV_RELAY_PUMP_12V (1)
-#define LV_RELAY_BOOST_PUMP_12V (2)
-#define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)
-#define LV_RELAY_DIVERTER_DIRECTION (4)
-
-#define SSR_RELAY_I2C_ADDR (0x08)                 // Default I2C for quad SSR relay
+#define LV_RELAY_PUMP_12V                 (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
+#define LV_RELAY_UNUSED_12V               (2)     // Used to be for the boost pump relay coil, now unused˜
+#define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)     // When energized, this powers the SSR that controls power to the 24VAC transformer
+#define LV_RELAY_DIVERTER_DIRECTION       (4)     // When this and the 24VAC transformer are enabled, this drives the diverter valve to roof mode.
 
 Qwiic_Relay *quad_lv_relay;
 
@@ -77,16 +72,6 @@ const bool fast_lcd_comm = false;
 #define TIMER_SWITCH_INPUT_PIN     (8)  // Mechanical timer switch on outside of house
 #define RED_BUTTON_INPUT_PIN       (7)  // Simple momemtary contact push button
 #define DIVERTER_REQUEST_INPUT_PIN (5)  // Fed by an optoisolator
-
-const int button_pins[6] = {RED_BUTTON_INPUT_PIN, TIMER_SWITCH_INPUT_PIN, KEY_4_PIN, KEY_3_PIN, KEY_2_PIN, KEY_1_PIN};
-
-// These are indicies into the button_pins array
-#define BUTTON_RED    (0)
-#define TIMER_SWITCH  (1)
-#define BUTTON_MINUS  (2)
-#define BUTTON_PLUS   (3)
-#define BUTTON_ENTER  (4)
-#define BUTTON_SELECT (5)
 
 #define _TASK_SLEEP_ON_IDLE_RUN
 #include <TaskScheduler.h>
@@ -172,16 +157,20 @@ volatile bool minus_key_pressed = false;
 // to enabling polling, so the option remains in the code.
 
 // #define POLL_KEYS
-#ifndef POLL_KEYS
-//ISR(PCINT2_vect) 
-//{
-//  poll_keys_callback();
-//}
-const bool poll_keys_bool = false;
-Task process_pressed_keys(100, TASK_FOREVER, &process_pressed_keys_callback, &ts, true);
-#else
+#ifdef POLL_KEYS
 const bool poll_keys_bool = true;
-Task poll_keys(25, TASK_FOREVER, &poll_keys_callback, &ts, true);
+
+/* When in polling mode, this task will call 'process_pressed_keys_callback() if it finds any pressed keys */
+Task poll_keys(50 /* Sample 20 times per second*/, TASK_FOREVER, &poll_keys_callback, &ts, true);
+#else
+ISR(PCINT2_vect) 
+{
+  poll_keys_callback();
+}
+const bool poll_keys_bool = false;
+
+/* When in interrupt (not polling) mode, we have to run 'process_pressed_keys_callback() as a task */
+Task process_pressed_keys(100, TASK_FOREVER, &process_pressed_keys_callback, &ts, true);
 #endif
 
 volatile unsigned long lastInterruptTime = 0;
@@ -222,7 +211,7 @@ int lowest_memory = 2000;
 
 void check_free_memory(const __FlashStringHelper *caller)
 {
-  static int trace_initial_calls = 0;
+  static int trace_initial_calls = 10;
   int fm = free_memory();
   if (fm < LOW_MEMORY_LIMIT) {
     Serial.print(F("# alert low memory: "));
@@ -289,15 +278,12 @@ void monitor_diag_mode_callback(void)
 // to detect key status changes).
 void poll_keys_callback(void)
 {
-  unsigned long currentTime = millis();
-  if ((currentTime - lastInterruptTime) > debounce_delay) {  // Debounce check
+  if ((millis() - lastInterruptTime) > debounce_delay) {  // Debounce check
   
-    bool key_select = digitalRead(button_pins[BUTTON_SELECT]) == LOW;
-    bool key_enter = digitalRead(button_pins[BUTTON_ENTER]) == LOW;
-    bool key_plus = digitalRead(button_pins[BUTTON_PLUS]) == LOW;
-    bool key_minus = digitalRead(button_pins[BUTTON_MINUS]) == LOW;
-    bool timer_switch = digitalRead(button_pins[TIMER_SWITCH]) == LOW;
-    bool key_red = digitalRead(button_pins[BUTTON_RED]) == LOW;
+    bool key_select = !(PINB & (1 << PB4));
+    bool key_enter = !(PINB & (1 << PB3));
+    bool key_plus = !(PINB & (1 << PB2));
+    bool key_minus = !(PINB & (1 << PB1));
 
     if (key_select) {
       select_key_pressed = true;
@@ -312,7 +298,7 @@ void poll_keys_callback(void)
       minus_key_pressed = true;
     }
     
-    lastInterruptTime = currentTime;  // Update debounce timer
+    lastInterruptTime = millis();  // Update debounce timer
     if (poll_keys_bool) {
       process_pressed_keys_callback();
     }        
@@ -339,9 +325,19 @@ void process_pressed_keys_callback(void)
  
   if (plus_key_pressed) {
     switch (operating_mode) {
-      case m_normal:
-      case m_safe: // Move time forward 10 minutes for each press of the plus key
+      case m_normal:   // Move time forward 10 minutes for each press of the plus key
         adjustTime(600);
+        break;
+
+      case m_safe:
+        {
+          for (int i = 0 ; i < 50 ; i++) {
+            quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
+            Serial.print(F("# unused relay="));
+            Serial.println(quad_lv_relay->getState(LV_RELAY_UNUSED_12V));
+            delay(500);
+          }
+        }
         break;
 
       case m_pump:
@@ -372,6 +368,22 @@ void process_pressed_keys_callback(void)
     switch (operating_mode) {
       case m_normal:
         adjustTime(-600);
+        break;
+
+      case m_safe:
+        {
+          unsigned relay_history[4] = {0, 0, 0, 0};
+          for (int i = 0 ; i < 1000; i++){
+  
+            for (int relay = 0 ; relay < 4 ; relay++) {
+              relay_history[relay] += quad_lv_relay->getState(relay + 1);
+            }
+          }
+          for (int relay = 0 ; relay < 4 ; relay++) {
+            Serial.print(F("# relay count="));
+            Serial.println(relay_history[relay]);
+          }
+        }
         break;
 
       case m_pump:
@@ -475,8 +487,6 @@ void process_pressed_keys_callback(void)
     }
   }
   if (some_key_pressed) {
-//    backlight_timer = BACKLIGHT_ON_TIME;
-
     if (operating_mode == m_normal || operating_mode == m_safe) {
       monitor_diag_mode.disable();
     } else {
@@ -595,59 +605,61 @@ void monitor_pump_callback(void)
   // odd behavior where the pump kept turning back on during filter-clean hours
   static bool pump_started_due_to_time_of_day = false;
   check_free_memory(F("monitor_pump"));
-  if (pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
-    
-    if ((millis() - pump_on_off_time) > max_pump_on_time) {
-      // Turn off the pump
-      turn_pump_off();
-      Serial.println(F("# turning off pool pump due to time limit"));
-    }
-    float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
-
-    if (pressure_psi > max_psi) {
-      turn_pump_off();
-      Serial.print(F("# alert turning off pump due to overpressure: PSI="));
-      Serial.println(pressure_psi);
-    }
-
-    if (hour(arduino_time) == 20 && !timer_switch_on) {
-      turn_pump_off();
-      Serial.print(F("#  turning off pump due time of day"));
-    }
-
-    if (!diverter_valve_request) {
-      // If we are not being asked to send water to the roof, the pool-cleaner timer switch
-      // is not requesting pool cleaning, and this is not the time to filter the pool water
-      // by running the pump, then turn it off.
-      if (!timer_switch_on && !time_of_day_to_filter() && !manual_pump_request) {
+  if (operating_mode == m_normal) {
+    if (pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
+      
+      if ((millis() - pump_on_off_time) > max_pump_on_time) {
+        // Turn off the pump
         turn_pump_off();
-        Serial.println(F("# turning off pump due to lack of timer switch and diverter valve requests"));
-      } else {
-        if (diverter_valve_is_sending_water_to_pool()) {
-          // Although we have other reasons to run the pump, we need to turn it off to let the panels
-          // drain of pool water.  We will later turn it back on.
+        Serial.println(F("# turning off pool pump due to time limit"));
+      }
+      float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
+
+      if (pressure_psi > max_psi) {
+        turn_pump_off();
+        Serial.print(F("# alert turning off pump due to overpressure: PSI="));
+        Serial.println(pressure_psi);
+      }
+
+      if (hour(arduino_time) == 20 && !timer_switch_on) {
+        turn_pump_off();
+        Serial.print(F("#  turning off pump due time of day"));
+      }
+
+      if (!diverter_valve_request) {
+        // If we are not being asked to send water to the roof, the pool-cleaner timer switch
+        // is not requesting pool cleaning, and this is not the time to filter the pool water
+        // by running the pump, then turn it off.
+        if (!timer_switch_on && !time_of_day_to_filter() && !manual_pump_request) {
           turn_pump_off();
-          Serial.println(F("# turning off pump to let panels drain"));
+          Serial.println(F("# turning off pump due to lack of timer switch and diverter valve requests"));
+        } else {
+          if (diverter_valve_is_sending_water_to_pool()) {
+            // Although we have other reasons to run the pump, we need to turn it off to let the panels
+            // drain of pool water.  We will later turn it back on.
+            turn_pump_off();
+            Serial.println(F("# turning off pump to let panels drain"));
+          }
+        }
+      }
+    } else { // Pump is not no, see if it should be, but only after a two minute delay for any draining needed
+      if ((pump_on_off_time - millis()) > 120 * 1000UL) {
+        if (timer_switch_on) {
+          turn_pump_on();
+          Serial.println(F("# turning pump back on for timer switch"));
+        }
+
+        // If it is the time of day to filter, turn on the pump, but only do this once per day
+        if (time_of_day_to_filter() && !pump_started_due_to_time_of_day) {
+          turn_pump_on();
+          pump_started_due_to_time_of_day = true;
+          Serial.println(F("# starting pump due to time of day"));
         }
       }
     }
-  } else { // Pump is not no, see if it should be, but only after a two minute delay for any draining needed
-    if ((pump_on_off_time - millis()) > 120 * 1000UL) {
-      if (timer_switch_on) {
-        turn_pump_on();
-        Serial.println(F("# turning pump back on for timer switch"));
-      }
-
-      // If it is the time of day to filter, turn on the pump, but only do this once per day
-      if (time_of_day_to_filter() && !pump_started_due_to_time_of_day) {
-        turn_pump_on();
-        pump_started_due_to_time_of_day = true;
-        Serial.println(F("# starting pump due to time of day"));
-      }
+    if (pump_started_due_to_time_of_day && hour(arduino_time) > 20) {
+      pump_started_due_to_time_of_day = false;
     }
-  }
-  if (pump_started_due_to_time_of_day && hour(arduino_time) > 20) {
-    pump_started_due_to_time_of_day = false;
   }
   check_free_memory(F("monitor_pump exit"));
 }
@@ -1018,24 +1030,23 @@ void setup_lcd(void)
     
     lcd->setCursor(0, 2);
     lcd->print(F(__TIME__));         // Display this on the third row, left-adjusted
-//    backlight_timer = BACKLIGHT_ON_TIME;
   }
 }
 
 void setup_arduino_pins(void)
 {
-  for (int i = 0; i < 6; i++) {
-    pinMode(button_pins[i], INPUT_PULLUP);  // enable internal pull-up
-    attachPinChangeInterrupt(digitalPinToPCINT(button_pins[i]), poll_keys_callback, FALLING);
-  }
-  
-  pinMode(LED_BUILTIN, OUTPUT); 
-  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP);
-
   pinMode(2, INPUT_PULLUP); // Give unconnected pins a pull up resistor so that they don't cause spurious interrupts or waste power
   pinMode(3, INPUT_PULLUP);
   pinMode(4, INPUT_PULLUP);
+  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5
   pinMode(6, INPUT_PULLUP);
+  pinMode(RED_BUTTON_INPUT_PIN, INPUT_PULLUP);      // D7/PD7
+  pinMode(TIMER_SWITCH_INPUT_PIN, INPUT_PULLUP);    // D8/PB0
+  pinMode(KEY_1_PIN, INPUT_PULLUP);                 // D9/PB1
+  pinMode(KEY_2_PIN, INPUT_PULLUP);                 // D10/PB2
+  pinMode(KEY_3_PIN, INPUT_PULLUP);                 // D11/PB3
+  pinMode(KEY_4_PIN, INPUT_PULLUP);                 // D12/PB4
+  pinMode(LED_BUILTIN, OUTPUT);                     // D13/PB5
 }
 
 void setup_i2c_bus(void)
@@ -1070,12 +1081,6 @@ void setup_i2c_bus(void)
            }
            break;
 
-         case SSR_RELAY_I2C_ADDR:
-           if (verbose_I2C) {
-               Serial.print(F(" (Quad SSR Qwiic Relay)"));
-             }
-             break;
-             
          case LV_RELAY_I2C_ADDR:
            if (verbose_I2C) {
              Serial.print(F(" (Quad Qwiic Relay)"));
@@ -1160,28 +1165,35 @@ void setup(void)
   setup_arduino_pins();
   analogReference(DEFAULT);
   if (!date_set && !time_set) {
-    setup_arduino_time();
+   setup_arduino_time();
   }
 
   Wire.begin();
-//  Wire.setClock(400000); 
+  Wire.setClock(400000); 
 
   Serial.begin(SERIAL_BAUD);
   UCSR0A = UCSR0A | (1 << TXC0); //Clear Transmit Complete Flag
   Serial.println(F("# Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
   
   setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
-//  Serial.println(F("# About to setup LCD"));
-  delay(100);
   setup_lcd();
-  delay(100);
-//  Serial.println(F("# almost done with setup"));
+  if (poll_keys_bool) {
+    delay(10000);
+    Serial.println(F("# Using polling task to detect key and digital input changes"));
+    Serial.flush();
+  } else {
+    PCICR |= (1 << PCIE0);                                        // Enable Pin Change Interrupt for PORTB (PCIE0) 
+    PCICR &= ~((1 << PCIE2) | (1 << PCIE1));                      // Disable PCINT2 (PORTD) and PCINT1 (PORTC)
+    
+    PCMSK0 |= (1 << PCINT1) | (1 << PCINT2) | (1 << PCINT3) | (1 << PCINT4);  // Enable interrupts for D9–D12
+  } 
 
   // If we start with the diverter valve direction relay in the position for sending water to roof, but there is no request for this
   // then ensure that the diverter valve is sending water back to the pool.
   
   diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
   if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request) {
+    Serial.println(F("# turning diverter vavle to pool"));
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
   }
