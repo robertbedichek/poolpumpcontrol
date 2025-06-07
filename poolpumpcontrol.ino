@@ -1,7 +1,7 @@
 
 /*
-   This controls two 3-way valves on my roof.
-      
+  This controls a pool pump and a diverter valve.
+       
    Creative Commons Licence
    2025 Robert Bedichek
 
@@ -54,24 +54,6 @@ const bool fast_lcd_comm = false;
 
 // #define BACKLIGHT_ON_TIME (600) 
 
-#define POOL_TEMPERATURE1_INPUT   (A0)     // 0-5VDC LM36 that is immersed in pool water, about 1' deep under diving board
-#define POOL_TEMPERATURE2_INPUT   (A1)     // A second LM36 in the same probe, for redundancy
-#define OUTSIDE_TEMPERATURE_INPUT (A2)     // An LM36 sensing ambient temperature near the pool equipment
-#define PRESSURE_INPUT            (A3)     // 0-5VDC pressure sensor on top of filter canister
-
-
-// The four maintenance keys (select, enter, plus, minus -- from top to bottom) are connected to pins
-// 12 through 9.  When pressed, they ground their Arduino inputs, when released, the Arduino inputs
-// are pulled up an an internal resistor.
-
-#define KEY_1_PIN (12)  // Top most input key
-#define KEY_2_PIN (11)
-#define KEY_3_PIN (10)
-#define KEY_4_PIN (9)  // Bottom most input key
-
-#define TIMER_SWITCH_INPUT_PIN     (8)  // Mechanical timer switch on outside of house
-#define RED_BUTTON_INPUT_PIN       (7)  // Simple momemtary contact push button
-#define DIVERTER_REQUEST_INPUT_PIN (5)  // Fed by an optoisolator
 
 #define _TASK_SLEEP_ON_IDLE_RUN
 #include <TaskScheduler.h>
@@ -140,6 +122,52 @@ const float max_pressure_sending_water_to_roof = 25.0;
 
 Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs_callback, &ts, true);
 /*****************************************************************************************************/
+#define POOL_TEMPERATURE1_INPUT   (A0)     // 0-5VDC LM36 that is immersed in pool water, about 1' deep under diving board
+#define POOL_TEMPERATURE2_INPUT   (A1)     // A second LM36 in the same probe, for redundancy
+#define OUTSIDE_TEMPERATURE_INPUT (A2)     // An LM36 sensing ambient temperature near the pool equipment
+#define PRESSURE_INPUT            (A3)     // 0-5VDC pressure sensor on top of filter canister
+
+
+
+void setup_arduino_pins(void)
+{
+  // Give unconnected pins a pull up resistor so that they don't cause spurious interrupts or waste power
+  pinMode(2, INPUT_PULLUP);                          // Unconnected and unused input
+  pinMode(3, INPUT_PULLUP);                          // Unconnected and unused input
+  pinMode(4, INPUT_PULLUP);                          // Unconnected and unused input
+ 
+ #define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator
+  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5
+  
+  pinMode(6, INPUT_PULLUP);                          // Unconnected and unused input
+
+#define RED_BUTTON_INPUT_PIN       (7)               // Simple momemtary contact push button
+  pinMode(RED_BUTTON_INPUT_PIN, INPUT_PULLUP);       // D7/PD7
+
+#define TIMER_SWITCH_INPUT_PIN     (8)               // Mechanical timer switch on outside of house
+  pinMode(TIMER_SWITCH_INPUT_PIN, INPUT_PULLUP);     // D8/PB0
+
+
+  // The four maintenance keys (select, enter, plus, minus -- from top to bottom) are connected to pins
+  // 12 through 9.  When pressed, they ground their Arduino inputs, when released, the Arduino inputs
+  // are pulled up an an internal resistor.
+
+
+#define KEY_4_PIN (9)                               // Bottom most input key, "-"
+  pinMode(KEY_4_PIN, INPUT_PULLUP);                 // D9/PB1
+
+#define KEY_3_PIN (10)                              // Second from the bottom input key, "+"
+  pinMode(KEY_3_PIN, INPUT_PULLUP);                 // D10/PB2
+
+#define KEY_2_PIN (11)                              // Second from top input key, "Enter" (unused)
+  pinMode(KEY_2_PIN, INPUT_PULLUP);                 // D11/PB3
+
+#define KEY_1_PIN (12)                              // Top most input key, "Select"
+  pinMode(KEY_1_PIN, INPUT_PULLUP);                 // D12/PB4
+  
+  pinMode(LED_BUILTIN, OUTPUT);                     // D13/PB5
+}
+
 // We have two options for how to recognize pressing of one of the four keys.  One is to rapidly poll
 // the state of the digital input pins to which the keys are connected.  The other is to enable any-input-change
 // interrupts.  We have to use the polling method if we want to use certain libraries, e.g., SoftSerial.  Otherwise,
@@ -156,7 +184,7 @@ volatile bool minus_key_pressed = false;
 // resource needs (e.g., SoftSerial) or we want to try polling to isolate certain bugs, we may want
 // to enabling polling, so the option remains in the code.
 
-// #define POLL_KEYS
+#define POLL_KEYS
 #ifdef POLL_KEYS
 const bool poll_keys_bool = true;
 
@@ -198,7 +226,7 @@ int free_memory() {
 }
 
 // Flag a warning if there are fewer than this number of bytes of free memory.
-#define LOW_MEMORY_LIMIT (400)
+#define LOW_MEMORY_LIMIT (500)
 
 // This will be overwritten on the first call to "check_free_memory(F("..."));".  It
 // records the smallest number of bytes of free memory
@@ -211,7 +239,7 @@ int lowest_memory = 2000;
 
 void check_free_memory(const __FlashStringHelper *caller)
 {
-  static int trace_initial_calls = 10;
+  static int trace_initial_calls = 0;
   int fm = free_memory();
   if (fm < LOW_MEMORY_LIMIT) {
     Serial.print(F("# alert low memory: "));
@@ -332,10 +360,15 @@ void process_pressed_keys_callback(void)
       case m_safe:
         {
           for (int i = 0 ; i < 50 ; i++) {
-            quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
+            if (quad_lv_relay != (void *)0) {
+              quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
+            }
             Serial.print(F("# unused relay="));
-            Serial.println(quad_lv_relay->getState(LV_RELAY_UNUSED_12V));
-            delay(500);
+            bool v = false;
+            if (quad_lv_relay != (void *)0) {
+              v = quad_lv_relay->getState(LV_RELAY_UNUSED_12V);
+            }
+            Serial.println(v);
           }
         }
         break;
@@ -347,9 +380,14 @@ void process_pressed_keys_callback(void)
         Serial.println(pump_is_on());
         break;
 
+      
+      case m_24vac:
+        turn_diverter_valve_transformer_on();
+        break;
+
       case m_diverter:
-        set_diverter_valve_to_send_water_to_roof();
         Serial.print(F("# diverter valve="));
+        set_diverter_valve_to_send_water_to_roof();
         if (diverter_valve_is_sending_water_to_roof()) {
           Serial.println("roof");
         } else {
@@ -357,9 +395,10 @@ void process_pressed_keys_callback(void)
         }
         break; 
 
-      case m_24vac:
-        turn_diverter_valve_transformer_on();
+      default:
+        Serial.println(F("# unknown operating mode"));
         break;
+
     }
     plus_key_pressed = false;
   }
@@ -376,7 +415,9 @@ void process_pressed_keys_callback(void)
           for (int i = 0 ; i < 1000; i++){
   
             for (int relay = 0 ; relay < 4 ; relay++) {
-              relay_history[relay] += quad_lv_relay->getState(relay + 1);
+              if (quad_lv_relay != (void *)0) {
+                relay_history[relay] += quad_lv_relay->getState(relay + 1);
+              }
             }
           }
           for (int relay = 0 ; relay < 4 ; relay++) {
@@ -393,6 +434,10 @@ void process_pressed_keys_callback(void)
         Serial.println(pump_is_on());
         break;
 
+      case m_24vac:
+        turn_diverter_valve_transformer_off();
+        break;
+
       case m_diverter:
         set_diverter_valve_to_return_water_to_pool();
         Serial.print(F("# diverter valve="));
@@ -402,11 +447,10 @@ void process_pressed_keys_callback(void)
           Serial.println("pool");
         }
         break; 
-
-      case m_24vac:
-        turn_diverter_valve_transformer_off();
+        
+      default:
+        Serial.println(F("# unknown operating mode"));
         break;
-
     }
     minus_key_pressed = false;
   }
@@ -501,7 +545,9 @@ void turn_pump_on(void)
 {
   if (pump_is_on() == false) {
 //    panels_draining_pool_water = false;
-    quad_lv_relay->turnRelayOn(LV_RELAY_PUMP_12V);  
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOn(LV_RELAY_PUMP_12V);  
+    }
     pump_on_off_time = millis();
     Serial.print(F("# turn_pump_on(): "));
     Serial.println(pump_on_off_time);
@@ -511,7 +557,9 @@ void turn_pump_on(void)
 void turn_pump_off(void)
 {
   if (pump_is_on()) {
-    quad_lv_relay->turnRelayOff(LV_RELAY_PUMP_12V);
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOff(LV_RELAY_PUMP_12V);
+    }
     pump_on_off_time = millis();
     Serial.print(F("# turn_pump_off(): "));
     Serial.println(pump_on_off_time);
@@ -520,12 +568,18 @@ void turn_pump_off(void)
 
 bool pump_is_on(void)
 {
-  return quad_lv_relay->getState(LV_RELAY_PUMP_12V);
+  bool v = false;
+  if (quad_lv_relay != (void *)0) {
+    v = quad_lv_relay->getState(LV_RELAY_PUMP_12V);
+  }
+  return v;
 }
 
 void turn_diverter_valve_transformer_on(void)
 {
-  quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  if (quad_lv_relay != (void *)0) {
+    quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  }
   diverter_valve_transformer_on_time = millis();
   Serial.print(F("# turning on diverter valve transformer millis()="));  
   Serial.println(diverter_valve_transformer_on_time);
@@ -533,7 +587,9 @@ void turn_diverter_valve_transformer_on(void)
 
 void turn_diverter_valve_transformer_off(void)
 {
-  quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  if (quad_lv_relay != (void *)0) {
+    quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  }
   diverter_valve_transformer_on_time = 0;
   Serial.print(F("# turning off diverter valve transformer millis()="));
   Serial.println(millis());
@@ -542,19 +598,27 @@ void turn_diverter_valve_transformer_off(void)
 
 bool diverter_valve_transformer_is_on(void)
 {
-  return quad_lv_relay->getState(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  bool v = false;
+  if (quad_lv_relay != (void *)0) {
+    v = quad_lv_relay->getState(LV_RELAY_DIVERTER_TRANSFORMER_12V);
+  }
+  return v;
 }
 
 // Returns true if the diverter valve is sending water to the roof
 
 bool diverter_valve_is_sending_water_to_roof(void)
 {
-  return quad_lv_relay->getState(LV_RELAY_DIVERTER_DIRECTION);
+  bool v = false;
+  if (quad_lv_relay != (void *)0) {
+    v = quad_lv_relay->getState(LV_RELAY_DIVERTER_DIRECTION);
+  }
+  return v;
 }
 
 bool diverter_valve_is_sending_water_to_pool(void)
 {
-  return !diverter_valve_is_sending_water_to_pool();
+  return !diverter_valve_is_sending_water_to_roof();
 }
 
 // Set the relay that takes the 24VAC power and
@@ -564,9 +628,11 @@ bool diverter_valve_is_sending_water_to_pool(void)
  
 void set_diverter_valve_to_send_water_to_roof(void)
 {
-  diverter_valve_in_roof_position_time = millis();
+//  diverter_valve_in_roof_position_time = millis();
   if (diverter_valve_is_sending_water_to_pool()) {
-    quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_DIRECTION);
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_DIRECTION);
+    }
   }
 }
 
@@ -576,8 +642,10 @@ void set_diverter_valve_to_send_water_to_roof(void)
 
 void set_diverter_valve_to_return_water_to_pool(void)
 {
-  if (diverter_valve_is_sending_water_to_roof() && !pump_is_on()) {
-   quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_DIRECTION);
+  if (diverter_valve_is_sending_water_to_roof()) {
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_DIRECTION);
+    }
   }
 }
 const unsigned long max_pump_on_time = 5 * 3600 * 1000UL;
@@ -956,7 +1024,7 @@ void monitor_serial_console_callback(void)
       break;
     }
     if (received_char == '\n') {
-      Serial.print(F("# Recieved: "));
+      Serial.print(F("# Received: "));
       Serial.println(command_buf);
 
       switch (command_buf[0]) {   
@@ -1033,21 +1101,6 @@ void setup_lcd(void)
   }
 }
 
-void setup_arduino_pins(void)
-{
-  pinMode(2, INPUT_PULLUP); // Give unconnected pins a pull up resistor so that they don't cause spurious interrupts or waste power
-  pinMode(3, INPUT_PULLUP);
-  pinMode(4, INPUT_PULLUP);
-  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5
-  pinMode(6, INPUT_PULLUP);
-  pinMode(RED_BUTTON_INPUT_PIN, INPUT_PULLUP);      // D7/PD7
-  pinMode(TIMER_SWITCH_INPUT_PIN, INPUT_PULLUP);    // D8/PB0
-  pinMode(KEY_1_PIN, INPUT_PULLUP);                 // D9/PB1
-  pinMode(KEY_2_PIN, INPUT_PULLUP);                 // D10/PB2
-  pinMode(KEY_3_PIN, INPUT_PULLUP);                 // D11/PB3
-  pinMode(KEY_4_PIN, INPUT_PULLUP);                 // D12/PB4
-  pinMode(LED_BUILTIN, OUTPUT);                     // D13/PB5
-}
 
 void setup_i2c_bus(void)
 {
@@ -1124,7 +1177,7 @@ void setup_i2c_bus(void)
     }
   }
   if (quad_lv_relay == (void *)0) {
-    fail(F("REL LV"));
+   // fail(F("REL LV"));
   }
 }
 
@@ -1164,21 +1217,33 @@ void setup(void)
 {
   setup_arduino_pins();
   analogReference(DEFAULT);
-  if (!date_set && !time_set) {
-   setup_arduino_time();
-  }
 
   Wire.begin();
   Wire.setClock(400000); 
 
+  uint8_t mcusr = MCUSR;
+  MCUSR = 0;
+ 
   Serial.begin(SERIAL_BAUD);
   UCSR0A = UCSR0A | (1 << TXC0); //Clear Transmit Complete Flag
+  
+  if (mcusr & (1 << BORF)) {
+    Serial.println("Reset cause: Brown-out");
+  }
+  if (mcusr & (1 << WDRF)) {
+    Serial.println("Reset cause: Watchdog");
+  }
+  
+  if (!date_set && !time_set) {
+    setup_arduino_time();
+  }
+
   Serial.println(F("# Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
   
   setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
+  Serial.println(F("# after i2c"));
   setup_lcd();
   if (poll_keys_bool) {
-    delay(10000);
     Serial.println(F("# Using polling task to detect key and digital input changes"));
     Serial.flush();
   } else {
@@ -1192,8 +1257,8 @@ void setup(void)
   // then ensure that the diverter valve is sending water back to the pool.
   
   diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
-  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request) {
-    Serial.println(F("# turning diverter vavle to pool"));
+  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request && !pump_is_on()) {
+    Serial.println(F("# turning diverter valve to pool"));
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
   }
