@@ -103,7 +103,7 @@ Task monitor_pump_control(TASK_SECOND, TASK_FOREVER, &monitor_pump_callback, &ts
 operating_mode_t operating_mode;
 
 unsigned long time_entering_diag_mode;  // Assigned millisIO when any diag mode is entered
-const unsigned long max_diag_mode_time = 3600UL * 1000UL; // One hour
+const unsigned long max_diag_mode_time = 1800UL * 1000UL; // Half an hour
 Task monitor_diag_mode(TASK_SECOND * 60, TASK_FOREVER, &monitor_diag_mode_callback, &ts, false);
 /*****************************************************************************************************/
 
@@ -184,7 +184,7 @@ volatile bool minus_key_pressed = false;
 // resource needs (e.g., SoftSerial) or we want to try polling to isolate certain bugs, we may want
 // to enabling polling, so the option remains in the code.
 
-#define POLL_KEYS
+#undef POLL_KEYS
 #ifdef POLL_KEYS
 const bool poll_keys_bool = true;
 
@@ -842,20 +842,20 @@ void read_time_and_sensor_inputs_callback()
   unsigned long raw_pool_temperature2_volts = 0;
   unsigned long raw_outside_temperature_volts = 0;
   unsigned long raw_pressure_volts = 0;
-  unsigned samples = 20;
+  unsigned adc_samples = 20;
 
   // Reduce sample noise by taking a number of samples and using the arithmetic mean
-  for (int i = 0 ; i < samples ; i++) {
+  for (int i = 0 ; i < adc_samples ; i++) {
     raw_pool_temperature1_volts += analogRead(POOL_TEMPERATURE1_INPUT);
     raw_pool_temperature2_volts += analogRead(POOL_TEMPERATURE2_INPUT);
     raw_outside_temperature_volts += analogRead(OUTSIDE_TEMPERATURE_INPUT);
     raw_pressure_volts += analogRead(PRESSURE_INPUT);
   }
   
-  raw_pool_temperature1_volts /= samples;  
-  raw_pool_temperature2_volts /= samples;
-  raw_outside_temperature_volts /= samples;
-  raw_pressure_volts /= samples; 
+  raw_pool_temperature1_volts /= adc_samples;  
+  raw_pool_temperature2_volts /= adc_samples;
+  raw_outside_temperature_volts /= adc_samples;
+  raw_pressure_volts /= adc_samples; 
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
   float pool_temperature1_millivolts = (float)raw_pool_temperature1_volts * 5000.0 / 1023.0;
@@ -877,7 +877,6 @@ void read_time_and_sensor_inputs_callback()
     // Something is wrong with the sensor
     pool_temperature1_F = 0;
   }
-
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
   float pool_temperature2_millivolts = (float)raw_pool_temperature2_volts * 5000.0 / 1023.0;
@@ -920,7 +919,7 @@ void read_time_and_sensor_inputs_callback()
   if (pressure_volts < 0.0) {
     pressure_volts = 0.0;
   }
-  pressure_psi = pressure_volts * 3.519; // Empircally derived calibration value
+  pressure_psi = pressure_volts * 4.905; // Empircally derived calibration value
   check_free_memory(F("read_time_and.. exit"));
 }
 
@@ -1177,7 +1176,7 @@ void setup_i2c_bus(void)
     }
   }
   if (quad_lv_relay == (void *)0) {
-   // fail(F("REL LV"));
+    Serial.println(F("# Warning, quad relay board not found"));
   }
 }
 
@@ -1238,10 +1237,10 @@ void setup(void)
     setup_arduino_time();
   }
 
-  Serial.println(F("# Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
+  Serial.println(F("\n# alert Reboot: Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
   
   setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
-  Serial.println(F("# after i2c"));
+
   setup_lcd();
   if (poll_keys_bool) {
     Serial.println(F("# Using polling task to detect key and digital input changes"));
@@ -1258,7 +1257,7 @@ void setup(void)
   
   diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
   if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request && !pump_is_on()) {
-    Serial.println(F("# turning diverter valve to pool"));
+    Serial.println(F("# Turning diverter valve to pool on startup"));
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
   }
