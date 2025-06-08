@@ -127,8 +127,6 @@ Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs
 #define OUTSIDE_TEMPERATURE_INPUT (A2)     // An LM36 sensing ambient temperature near the pool equipment
 #define PRESSURE_INPUT            (A3)     // 0-5VDC pressure sensor on top of filter canister
 
-
-
 void setup_arduino_pins(void)
 {
   // Give unconnected pins a pull up resistor so that they don't cause spurious interrupts or waste power
@@ -136,16 +134,16 @@ void setup_arduino_pins(void)
   pinMode(3, INPUT_PULLUP);                          // Unconnected and unused input
   pinMode(4, INPUT_PULLUP);                          // Unconnected and unused input
  
- #define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator
-  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5
+ #define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator that is driven by the 'solarthermal' controller
+  pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5.  A task polls for changes to this pin.
   
   pinMode(6, INPUT_PULLUP);                          // Unconnected and unused input
 
 #define RED_BUTTON_INPUT_PIN       (7)               // Simple momemtary contact push button
-  pinMode(RED_BUTTON_INPUT_PIN, INPUT_PULLUP);       // D7/PD7
+  pinMode(RED_BUTTON_INPUT_PIN, INPUT_PULLUP);       // D7/PD7.  A task polls for changes to this pin.
 
 #define TIMER_SWITCH_INPUT_PIN     (8)               // Mechanical timer switch on outside of house
-  pinMode(TIMER_SWITCH_INPUT_PIN, INPUT_PULLUP);     // D8/PB0
+  pinMode(TIMER_SWITCH_INPUT_PIN, INPUT_PULLUP);     // D8/PB0.  A task polls for changes to this pin.
 
 
   // The four maintenance keys (select, enter, plus, minus -- from top to bottom) are connected to pins
@@ -154,16 +152,16 @@ void setup_arduino_pins(void)
 
 
 #define KEY_4_PIN (9)                               // Bottom most input key, "-"
-  pinMode(KEY_4_PIN, INPUT_PULLUP);                 // D9/PB1
+  pinMode(KEY_4_PIN, INPUT_PULLUP);                 // D9/PB1.  Normally we take interrupts to recognize presses of this key.
 
 #define KEY_3_PIN (10)                              // Second from the bottom input key, "+"
-  pinMode(KEY_3_PIN, INPUT_PULLUP);                 // D10/PB2
+  pinMode(KEY_3_PIN, INPUT_PULLUP);                 // D10/PB2.  Normally we take interrupts to recognize presses of this key.
 
 #define KEY_2_PIN (11)                              // Second from top input key, "Enter" (unused)
-  pinMode(KEY_2_PIN, INPUT_PULLUP);                 // D11/PB3
+  pinMode(KEY_2_PIN, INPUT_PULLUP);                 // D11/PB3.  Normally we take interrupts to recognize presses of this key.
 
 #define KEY_1_PIN (12)                              // Top most input key, "Select"
-  pinMode(KEY_1_PIN, INPUT_PULLUP);                 // D12/PB4
+  pinMode(KEY_1_PIN, INPUT_PULLUP);                 // D12/PB4.  Normally we take interrupts to recognize presses of this key.
   
   pinMode(LED_BUILTIN, OUTPUT);                     // D13/PB5
 }
@@ -186,16 +184,14 @@ volatile bool minus_key_pressed = false;
 
 #undef POLL_KEYS
 #ifdef POLL_KEYS
-const bool poll_keys_bool = true;
 
 /* When in polling mode, this task will call 'process_pressed_keys_callback() if it finds any pressed keys */
 Task poll_keys(50 /* Sample 20 times per second*/, TASK_FOREVER, &poll_keys_callback, &ts, true);
 #else
-ISR(PCINT2_vect) 
+ISR(PCINT0_vect) 
 {
   poll_keys_callback();
 }
-const bool poll_keys_bool = false;
 
 /* When in interrupt (not polling) mode, we have to run 'process_pressed_keys_callback() as a task */
 Task process_pressed_keys(100, TASK_FOREVER, &process_pressed_keys_callback, &ts, true);
@@ -302,8 +298,9 @@ void monitor_diag_mode_callback(void)
 //   }
 // }
 
-// This is only called if we have compiled with the option to poll keys (and not use interrupts
-// to detect key status changes).
+// This is called by a task if we have compiled with the option to poll keys.  If we have 
+// compiled to use interrupts, this is the interrupt routine.
+
 void poll_keys_callback(void)
 {
   if ((millis() - lastInterruptTime) > debounce_delay) {  // Debounce check
@@ -327,9 +324,9 @@ void poll_keys_callback(void)
     }
     
     lastInterruptTime = millis();  // Update debounce timer
-    if (poll_keys_bool) {
-      process_pressed_keys_callback();
-    }        
+#ifdef POLL_KEYS
+    process_pressed_keys_callback();
+#endif
   } 
 }
 
@@ -1242,15 +1239,12 @@ void setup(void)
   setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
 
   setup_lcd();
-  if (poll_keys_bool) {
-    Serial.println(F("# Using polling task to detect key and digital input changes"));
-    Serial.flush();
-  } else {
-    PCICR |= (1 << PCIE0);                                        // Enable Pin Change Interrupt for PORTB (PCIE0) 
-    PCICR &= ~((1 << PCIE2) | (1 << PCIE1));                      // Disable PCINT2 (PORTD) and PCINT1 (PORTC)
-    
-    PCMSK0 |= (1 << PCINT1) | (1 << PCINT2) | (1 << PCINT3) | (1 << PCINT4);  // Enable interrupts for D9–D12
-  } 
+
+#ifndef POLL_KEYS
+  PCICR |= (1 << PCIE0);                                        // Enable Pin Change Interrupt for PORTB (PCIE0) 
+  PCICR &= ~((1 << PCIE2) | (1 << PCIE1));                      // Disable PCINT2 (PORTD) and PCINT1 (PORTC)
+  PCMSK0 |= (1 << PCINT1) | (1 << PCINT2) | (1 << PCINT3) | (1 << PCINT4);  // Enable interrupts for D9–D12
+#endif
 
   // If we start with the diverter valve direction relay in the position for sending water to roof, but there is no request for this
   // then ensure that the diverter valve is sending water back to the pool.
