@@ -107,14 +107,6 @@ try:
       print("⚠️  Corrupted data skipped:", line)
       line = ""
     if line and is_valid_data_line(line):
-      # After reading the first data line from the Arduino, send it a command to set its time
-      # and do this every 1000 lines we receive from the Arduino
-#      if (linecount % 1000) == 0:
-#        timestamp = f"t {datetime.now():%H:%M:%S}"
-#        ser.write((timestamp + '\n').encode())
-#        datestamp = 'd ' + date.today().strftime('%Y-%m-%d')
-#        ser.write((datestamp + '\n').encode())
-
       linecount = linecount + 1
       if "alert" in line.lower():
         data = {
