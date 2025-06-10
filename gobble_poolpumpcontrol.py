@@ -30,7 +30,8 @@ SSH_COMMAND = [
     "cat >> /var/www/home/poolpumpcontrol.txt"
 ]
 
-port = "/dev/tty.usbserial-211440"
+# port = "/dev/tty.usbserial-211440"
+port = "/dev/tty.usbserial-212440"
 baud_rate = 115200
 
 ser = serial.Serial(port, baud_rate, timeout=1)
