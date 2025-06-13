@@ -82,7 +82,11 @@ const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
 
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
+unsigned long last_diverter_valve_request_change;  // Value of millis() the last time the input from the solarthermal controller changed.
+
 void monitor_diverter_valve_callback(void);
+//-------------------------------------------------------------------------------------
+
 void monitor_diag_mode_callback(void);
 void monitor_serial_console_callback(void);
 void process_pressed_keys_callback(void);
@@ -506,9 +510,7 @@ void process_pressed_keys_callback(void)
     diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
     if (diverter_valve_request != last_diverter_valve_request) {
       last_diverter_valve_request = diverter_valve_request;
-      static unsigned long last_diverter_valve_request_time;
-
-      if ((millis() - last_diverter_valve_request_time) > debounce_delay) {
+      if ((millis() - last_diverter_valve_request_change) > debounce_delay) {
         some_key_pressed = true;
         if (diverter_valve_request) {
           turn_diverter_valve_transformer_on();
@@ -522,6 +524,7 @@ void process_pressed_keys_callback(void)
           // needing to stay on)
         }
       }
+      last_diverter_valve_request_change = millis();
     }
   }
   if (some_key_pressed) {
@@ -537,7 +540,7 @@ void process_pressed_keys_callback(void)
 
 void turn_pump_on(const __FlashStringHelper *message)
 {
-  if (message != (void *)0 {
+  if (message != (void *)0) {
     Serial.print(message);
   }
   if (pump_is_on() == false) {
@@ -678,9 +681,11 @@ void monitor_pump_callback(void)
         if (!timer_switch_on && !manual_pump_request) {
           turn_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
         } else {
-          if (diverter_valve_is_sending_water_to_roof()) {
+          if (diverter_valve_is_sending_water_to_roof() &&
+          (millis() - last_diverter_valve_request_change) < 60 * 1000UL) {
             // Although we have other reasons to run the pump, we need to turn it off to let the panels
-            // drain of pool water.  We will later turn it back on.
+            // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
+            // if the the diverter request just went away within the last minute.
             turn_pump_off(F("# turning off pump to let panels drain\n"));
           }
         }
