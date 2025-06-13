@@ -246,7 +246,9 @@ void check_free_memory(const __FlashStringHelper *caller)
   }
   if (trace_initial_calls > 0) {
     Serial.print(F("# alert "));
-    Serial.print(caller);
+    if (caller != (void *)0) {
+      Serial.print(caller);
+    }
     Serial.print(F(" free memory="));
     Serial.println(fm);
     trace_initial_calls--;
@@ -535,7 +537,9 @@ void process_pressed_keys_callback(void)
 
 void turn_pump_on(const __FlashStringHelper *message)
 {
-  Serial.print(message);
+  if (message != (void *)0 {
+    Serial.print(message);
+  }
   if (pump_is_on() == false) {
     if (quad_lv_relay != (void *)0) {
       quad_lv_relay->turnRelayOn(LV_RELAY_PUMP_12V);  
@@ -548,7 +552,9 @@ void turn_pump_on(const __FlashStringHelper *message)
 
 void turn_pump_off(const __FlashStringHelper *message)
 {
-  Serial.print(message);
+  if (message != (void *)0) {
+    Serial.print(message);
+  }
   if (pump_is_on()) {
     if (quad_lv_relay != (void *)0) {
       quad_lv_relay->turnRelayOff(LV_RELAY_PUMP_12V);
@@ -948,7 +954,9 @@ void print_status_to_serial_callback(void)
 void fail(const __FlashStringHelper *fail_message)
 {
   Serial.print(F("FAIL: "));
-  Serial.println(fail_message);
+  if (fail_message != (void *)0) {
+    Serial.println(fail_message);
+  }
   delay(500); // Give the serial link time to propogate the error message before execution ends
   abort();
 }
