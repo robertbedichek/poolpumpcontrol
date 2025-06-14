@@ -6,7 +6,7 @@
    2025 Robert Bedichek
 
 * Connection to this Arduino via USB serial line is normally on this port: /dev/tty.usbserial-211440, though
-* nothing in this code depends on this (just a note-to-self).
+* nothing in this code depends on the USB serial line working.  
 */
 
 #include <string.h> //Use the string Library
@@ -15,18 +15,12 @@
 
 //   All the operational code uses this time structure.  This is initialized at start time from the battery-backed up DS1307 RTC.
 time_t arduino_time;
+const bool verbose_I2C = false;
 
-
-#include <EEPROM.h>
-const bool verbose_rtc = true; // Adds 70 bytes to RAM demand if true
-const bool verbose_I2C = true;
-/*
- * We have two Sparkfun relay boards and possibly other 1-wire devices
- */
-#include <Wire.h>
+#include <Wire.h> // For communication with Sparkfun quad relay and LCD display
 
 /*
- * Low voltage relay bank.  Relays 1 and 2 control the power to inlet valve motors.
+ * Sparkfun quad low voltage relays.  Relays 1 and 2 control the power to inlet valve motors.
  * Relay 3 and 4 control the power to the outlet valve.
  * The NC pins of all four relays are connected to ground.
  * The NO pins of all four relays are connected to +12V.
@@ -669,10 +663,6 @@ void monitor_pump_callback(void)
         Serial.println(pressure_psi);
       }
 
-      if (hour(arduino_time) == 20 && !timer_switch_on) {
-        turn_pump_off(F("#  turning off pump due time of day\n"));
-      }
-
       if (!diverter_valve_request) {
         // If we are not being asked to send water to the roof, the pool-cleaner timer switch
         // is not requesting pool cleaning, and this is not the time to filter the pool water
@@ -1195,10 +1185,9 @@ void setup(void)
     setup_arduino_time();
   }
 
-  Serial.println(F("\n# alert Reboot: Pool pump and valve controller"));              // Put the first line we print on a fresh line (i.e., left column of output)
-  
-  setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
+  Serial.println(F("\n# alert Pool pump and valve controller. " __DATE__ " " __TIME__));
 
+  setup_i2c_bus(); // This sets "quad_lv_relay" and "lcd"
   setup_lcd();
 
 #ifndef POLL_KEYS
