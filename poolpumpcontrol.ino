@@ -465,9 +465,8 @@ void process_pressed_keys_callback(void)
     
     if (red_button_pressed != last_red_button_pressed) { // Button state changed
       static unsigned long last_red_button_press_time;
-      unsigned long now = millis();
 
-      if ((now - last_red_button_press_time) > debounce_delay) {
+      if ((millis() - last_red_button_press_time) > debounce_delay) {
         some_key_pressed = true;
         if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
           if (pump_is_on()) {
@@ -691,7 +690,7 @@ void monitor_pump_callback(void)
         }
       }
     } else { // Pump is not on, see if it should be, but only after a twenty minute delay for any draining needed
-      if ((pump_on_off_time - millis()) > drain_down_time) {
+      if ((millis() - pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_pump_on(F("# turning pump back on for timer switch\n"));
         }
@@ -709,7 +708,7 @@ void monitor_diverter_valve_callback(void)
     // water to the roof, we assume that the panels have had time to drain and we
     // turn the diverter valve back to pool mode
     if (!pump_is_on() && diverter_valve_is_sending_water_to_roof()) {
-      if ((pump_on_off_time - millis()) > drain_down_time) {
+      if ((millis() - pump_on_off_time) > drain_down_time) {
         turn_diverter_valve_transformer_on();
         set_diverter_valve_to_return_water_to_pool();
       }
