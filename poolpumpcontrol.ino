@@ -644,7 +644,7 @@ void set_diverter_valve_to_return_water_to_pool(void)
     }
   }
 }
-const unsigned long max_pump_on_time = 5 * 3600 * 1000UL;
+const unsigned long max_pump_on_time = 3 * 3600 * 1000UL;
 
 void monitor_pump_callback(void)
 {
@@ -683,6 +683,8 @@ void monitor_pump_callback(void)
       if ((millis() - pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_pump_on(F("# turning pump back on for timer switch\n"));
+        } else if ((millis() - pump_on_off_time) > 24 * 3600 * 1000UL) {
+          turn_pump_on(F("# periodic filtering\n"));
         }
       }
     }
