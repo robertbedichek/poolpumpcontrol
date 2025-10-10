@@ -465,10 +465,10 @@ void process_pressed_keys_callback(void)
         if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
           if (pump_is_on()) {
             manual_pump_request = false;
-            turn_pump_off(F("# Pool pump is on, turning it off\n"));
+            turn_pump_off(F("# Pool pump is on, turning it off due to press of red button\n"));
           } else {
             manual_pump_request = true;
-            turn_pump_on(F("# Pool pump is off, turning it on\n"));
+            turn_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
           }
         }
       }
@@ -644,7 +644,7 @@ void set_diverter_valve_to_return_water_to_pool(void)
     }
   }
 }
-const unsigned long max_pump_on_time = 3 * 3600 * 1000UL;
+const unsigned long max_pump_on_time = 3UL * 3600UL * 1000UL;
 
 void monitor_pump_callback(void)
 {
@@ -655,12 +655,14 @@ void monitor_pump_callback(void)
       if ((millis() - pump_on_off_time) > max_pump_on_time) {
         // Turn off the pump
         turn_pump_off(F("# turning off pool pump due to time limit\n"));
+        manual_pump_request = false; // Cancel request
       }
       float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
 
       if (pressure_psi > max_psi) {
         turn_pump_off(F("# alert turning off pump due to overpressure: PSI="));
         Serial.println(pressure_psi);
+        manual_pump_request = false;
       }
 
       if (!diverter_valve_request) {
@@ -676,6 +678,7 @@ void monitor_pump_callback(void)
             // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
             // if the the diverter request just went away within the last minute.
             turn_pump_off(F("# turning off pump to let panels drain\n"));
+            manual_pump_request = false;
           }
         }
       }
@@ -683,8 +686,9 @@ void monitor_pump_callback(void)
       if ((millis() - pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_pump_on(F("# turning pump back on for timer switch\n"));
-        } else if ((millis() - pump_on_off_time) > 24 * 3600 * 1000UL) {
+        } else if ((millis() - pump_on_off_time) > 24UL * 3600UL * 1000UL) {
           turn_pump_on(F("# periodic filtering\n"));
+          manual_pump_request = true;
         }
       }
     }
@@ -1207,6 +1211,11 @@ void setup(void)
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
   }
+
+  // On reboot since we don't know how long it has been since the pool pump ran to filter pool water
+  // run it now.
+  turn_pump_on(F("# initial filtering\n"));
+  manual_pump_request = true;
 }
 
 /*
