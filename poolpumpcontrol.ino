@@ -72,10 +72,12 @@ void poll_keys_callback(void);
 void update_lcd_callback(void);
 
 void monitor_main_pump_callback(void);
+void monitor_boost_pump_callback(void);
 //-------------------------------------------------------------------------------------
 const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
+const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
 
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
@@ -101,7 +103,9 @@ const unsigned long max_diverter_power_on_time = 300 * 1000UL; // 5 minutes
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
 unsigned long diverter_valve_in_roof_position_time; // Assigned millis() when valve goes to send-to-roof position
 
-Task monitor_main_pump_control(TASK_SECOND, TASK_FOREVER, &monitor_main_pump_callback, &ts, true);
+Task monitor_main_pump(TASK_SECOND, TASK_FOREVER, &monitor_main_pump_callback, &ts, true);
+Task monitor_boost_pump(TASK_SECOND, TASK_FOREVER, &monitor_boost_pump_callback, &ts, true);
+
 operating_mode_t operating_mode;
 
 unsigned long time_entering_diag_mode;  // Assigned millis() when any diag mode is entered
@@ -128,6 +132,8 @@ Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs
 #define POOL_TEMPERATURE2_INPUT   (A1)     // A second LM36 in the same probe, for redundancy
 #define OUTSIDE_TEMPERATURE_INPUT (A2)     // An LM36 sensing ambient temperature near the pool equipment
 #define PRESSURE_INPUT            (A3)     // 0-5VDC pressure sensor on top of filter canister
+
+bool timer_switch_on;
 
 void setup_arduino_pins(void)
 {
@@ -334,7 +340,7 @@ void poll_keys_callback(void)
   } 
 }
 
-bool timer_switch_on;
+
 
 // The interrupt routine above will set global variables indicating which keys have been pressed.
 // In this function, we look at those global variables and take action required by the key presses
@@ -492,9 +498,10 @@ void process_pressed_keys_callback(void)
           some_key_pressed = true;
           if (main_pump_is_on() == false) {
             turn_main_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
-            
           } 
-          turn_boost_pump_on(F("# Boost pump on"));
+          // We will turn on the boost pump when we see that the main pump has developed
+          // pressure, to ensure that the main pump is working before we turn on the boost pump
+
         } 
       }
       last_timer_switch_on = timer_switch_on;
@@ -551,6 +558,9 @@ void turn_main_pump_off(const __FlashStringHelper *message)
   if (message != nullptr) {
     Serial.print(message);
   }
+  if (boost_pump_is_on()) {
+    turn_boost_pump_off(F("# alert turn_main_pump_off() found boost pump on"));
+  }
   if (main_pump_is_on()) {
     if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOff(LV_RELAY_MAIN_PUMP_12V);
@@ -563,7 +573,6 @@ void turn_main_pump_off(const __FlashStringHelper *message)
 
 bool main_pump_is_on(void)
 {
-  
   bool v = false;
   if (quad_lv_relay != nullptr) {
     v = quad_lv_relay->getState(LV_RELAY_MAIN_PUMP_12V);
@@ -576,7 +585,8 @@ void turn_boost_pump_on(const __FlashStringHelper *message)
   if (message != (void *)0) {
     Serial.print(message);
   }
-  if (boost_pump_is_on() == false) {
+  // Do not try to turn on the boost pump unless the main pump is on and the boost pump is off
+  if (main_pump_is_on() && boost_pump_is_on() == false) {
     if (quad_lv_relay != (void *)0) {
       quad_lv_relay->turnRelayOn(LV_RELAY_BOOST_PUMP_12V);  
     }
@@ -603,7 +613,6 @@ void turn_boost_pump_off(const __FlashStringHelper *message)
 
 bool boost_pump_is_on(void)
 {
-  
   bool v = false;
   if (quad_lv_relay != (void *)0) {
     v = quad_lv_relay->getState(LV_RELAY_BOOST_PUMP_12V);
@@ -732,10 +741,21 @@ void monitor_main_pump_callback(void)
       }
     }
   }
-  if (boost_pump_is_on() && pressure_psi < 5) {
+  
+  check_free_memory(F("monitor_pump exit"));
+}
+
+void monitor_boost_pump_callback(void)
+{
+  if (main_pump_is_on() && timer_switch_on && pressure_psi >= 5 && boost_pump_is_on() == false) {
+    turn_boost_pump_on(F("# timer switch requesting boost pump"));
+  } else if (boost_pump_is_on() && (main_pump_is_on() == false || pressure_psi < 5)) {
     turn_boost_pump_off(F("# low pressure, turning boost pump off"));
   }
-  check_free_memory(F("monitor_pump exit"));
+  if ((millis() - boost_pump_on_off_time) > max_boost_pump_on_time) {
+    // Turn off the boost pump
+    turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
+  }
 }
 
 void monitor_diverter_valve_callback(void)
