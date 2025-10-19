@@ -12,6 +12,7 @@
 #include <string.h> //Use the string Library
 #include <ctype.h>
 #include <TimeLib.h>  // for update/display of time
+#include <avr/wdt.h>
 
 //   All the operational code uses this time structure.  This is initialized at start time from the battery-backed up DS1307 RTC.
 time_t arduino_time;
@@ -73,6 +74,8 @@ void update_lcd_callback(void);
 void monitor_pump_callback(void);
 //-------------------------------------------------------------------------------------
 const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
+const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
+const unsigned long max_pump_on_time = 3UL * 3600UL * 1000UL;
 
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
@@ -92,7 +95,7 @@ char cbuf[60];
 
 bool manual_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long pump_on_off_time;        // Assigned millis() when main pump is switched on
-const unsigned long max_diverter_power_on_time = 300 * 1000; // 5 minutes
+const unsigned long max_diverter_power_on_time = 300 * 1000UL; // 5 minutes
 
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
 unsigned long diverter_valve_in_roof_position_time; // Assigned millis() when valve goes to send-to-roof position
@@ -115,7 +118,7 @@ float pool_temperature_F = 0.0; // Average of the two pool temperatures, or just
 float outside_temperature_F = 0.0;
 float pressure_psi;
 
-const float max_pressure_sending_water_to_pool = 20.0;
+const float max_pressure_sending_water_to_pool = 23.0;
 const float max_pressure_sending_water_to_roof = 25.0;
 
 Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs_callback, &ts, true);
@@ -341,11 +344,16 @@ void process_pressed_keys_callback(void)
   check_free_memory(F("process_keys.."));
   bool some_key_pressed = select_key_pressed | enter_key_pressed | plus_key_pressed | minus_key_pressed;
 
-  if (select_key_pressed) {
+  bool select_pressed;
+  noInterrupts();
+  select_pressed = select_key_pressed;
+  select_key_pressed = false;
+  interrupts();
+
+  if (select_pressed) {
     operating_mode = (operating_mode + 1) % m_last;
     Serial.print(F("# mode now "));
     Serial.println(operating_mode_to_string(operating_mode));
-    select_key_pressed = false;
   }
  
   if (plus_key_pressed) {
@@ -357,12 +365,12 @@ void process_pressed_keys_callback(void)
       case m_safe:
         {
           for (int i = 0 ; i < 50 ; i++) {
-            if (quad_lv_relay != (void *)0) {
+            if (quad_lv_relay != nullptr) {
               quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
             }
             Serial.print(F("# unused relay="));
             bool v = false;
-            if (quad_lv_relay != (void *)0) {
+            if (quad_lv_relay != nullptr) {
               v = quad_lv_relay->getState(LV_RELAY_UNUSED_12V);
             }
             Serial.println(v);
@@ -411,7 +419,7 @@ void process_pressed_keys_callback(void)
           for (int i = 0 ; i < 1000; i++){
   
             for (int relay = 0 ; relay < 4 ; relay++) {
-              if (quad_lv_relay != (void *)0) {
+              if (quad_lv_relay != nullptr) {
                 relay_history[relay] += quad_lv_relay->getState(relay + 1);
               }
             }
@@ -473,7 +481,7 @@ void process_pressed_keys_callback(void)
         }
       }
       last_red_button_pressed = red_button_pressed;
-      last_red_button_press_time = now;
+      last_red_button_press_time = millis();
     }
     timer_switch_on = digitalRead(TIMER_SWITCH_INPUT_PIN) == LOW;
     if (timer_switch_on != last_timer_switch_on) { // Button state changed
@@ -533,11 +541,11 @@ void process_pressed_keys_callback(void)
 
 void turn_pump_on(const __FlashStringHelper *message)
 {
-  if (message != (void *)0) {
+  if (message != nullptr) {
     Serial.print(message);
   }
   if (pump_is_on() == false) {
-    if (quad_lv_relay != (void *)0) {
+    if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOn(LV_RELAY_PUMP_12V);  
     }
     pump_on_off_time = millis();
@@ -548,11 +556,11 @@ void turn_pump_on(const __FlashStringHelper *message)
 
 void turn_pump_off(const __FlashStringHelper *message)
 {
-  if (message != (void *)0) {
+  if (message != nullptr) {
     Serial.print(message);
   }
   if (pump_is_on()) {
-    if (quad_lv_relay != (void *)0) {
+    if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOff(LV_RELAY_PUMP_12V);
     }
     pump_on_off_time = millis();
@@ -565,7 +573,7 @@ bool pump_is_on(void)
 {
   
   bool v = false;
-  if (quad_lv_relay != (void *)0) {
+  if (quad_lv_relay != nullptr) {
     v = quad_lv_relay->getState(LV_RELAY_PUMP_12V);
   }
   return v;
@@ -573,7 +581,7 @@ bool pump_is_on(void)
 
 void turn_diverter_valve_transformer_on(void)
 {
-  if (quad_lv_relay != (void *)0) {
+  if (quad_lv_relay != nullptr) {
     quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_TRANSFORMER_12V);
   }
   diverter_valve_transformer_on_time = millis();
@@ -583,7 +591,7 @@ void turn_diverter_valve_transformer_on(void)
 
 void turn_diverter_valve_transformer_off(void)
 {
-  if (quad_lv_relay != (void *)0) {
+  if (quad_lv_relay != nullptr) {
     quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_TRANSFORMER_12V);
   }
   diverter_valve_transformer_on_time = 0;
@@ -595,7 +603,7 @@ void turn_diverter_valve_transformer_off(void)
 bool diverter_valve_transformer_is_on(void)
 {
   bool v = false;
-  if (quad_lv_relay != (void *)0) {
+  if (quad_lv_relay != nullptr) {
     v = quad_lv_relay->getState(LV_RELAY_DIVERTER_TRANSFORMER_12V);
   }
   return v;
@@ -606,7 +614,7 @@ bool diverter_valve_transformer_is_on(void)
 bool diverter_valve_is_sending_water_to_roof(void)
 {
   bool v = false;
-  if (quad_lv_relay != (void *)0) {
+  if (quad_lv_relay != nullptr) {
     v = quad_lv_relay->getState(LV_RELAY_DIVERTER_DIRECTION);
   }
   return v;
@@ -624,9 +632,9 @@ bool diverter_valve_is_sending_water_to_pool(void)
  
 void set_diverter_valve_to_send_water_to_roof(void)
 {
-//  diverter_valve_in_roof_position_time = millis();
+  diverter_valve_in_roof_position_time = millis();
   if (diverter_valve_is_sending_water_to_pool()) {
-    if (quad_lv_relay != (void *)0) {
+    if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOn(LV_RELAY_DIVERTER_DIRECTION);
     }
   }
@@ -639,12 +647,12 @@ void set_diverter_valve_to_send_water_to_roof(void)
 void set_diverter_valve_to_return_water_to_pool(void)
 {
   if (diverter_valve_is_sending_water_to_roof()) {
-    if (quad_lv_relay != (void *)0) {
+    if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOff(LV_RELAY_DIVERTER_DIRECTION);
     }
   }
 }
-const unsigned long max_pump_on_time = 3UL * 3600UL * 1000UL;
+
 
 void monitor_pump_callback(void)
 {
@@ -656,29 +664,28 @@ void monitor_pump_callback(void)
         // Turn off the pump
         turn_pump_off(F("# turning off pool pump due to time limit\n"));
         manual_pump_request = false; // Cancel request
-      }
-      float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
+      } else {
+        float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
 
-      if (pressure_psi > max_psi) {
-        turn_pump_off(F("# alert turning off pump due to overpressure: PSI="));
-        Serial.println(pressure_psi);
-        manual_pump_request = false;
-      }
-
-      if (!diverter_valve_request) {
-        // If we are not being asked to send water to the roof, the pool-cleaner timer switch
-        // is not requesting pool cleaning, and this is not the time to filter the pool water
-        // by running the pump, then turn it off.
-        if (!timer_switch_on && !manual_pump_request) {
-          turn_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
-        } else {
-          if (diverter_valve_is_sending_water_to_roof() &&
-          (millis() - last_diverter_valve_request_change) < 60 * 1000UL) {
-            // Although we have other reasons to run the pump, we need to turn it off to let the panels
-            // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
-            // if the the diverter request just went away within the last minute.
-            turn_pump_off(F("# turning off pump to let panels drain\n"));
-            manual_pump_request = false;
+        if (pressure_psi > max_psi) {
+          turn_pump_off(F("# alert turning off pump due to overpressure: PSI="));
+          Serial.println(pressure_psi);
+          manual_pump_request = false;
+        } else if (!diverter_valve_request) {
+          // If we are not being asked to send water to the roof, the pool-cleaner timer switch
+          // is not requesting pool cleaning, and this is not the time to filter the pool water
+          // by running the pump, then turn it off.
+          if (!timer_switch_on && !manual_pump_request) {
+            turn_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
+          } else {
+            if (diverter_valve_is_sending_water_to_roof() &&
+            (millis() - last_diverter_valve_request_change) < 60 * 1000UL) {
+              // Although we have other reasons to run the pump, we need to turn it off to let the panels
+              // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
+              // if the the diverter request just went away within the last minute.
+              turn_pump_off(F("# turning off pump to let panels drain\n"));
+              manual_pump_request = false;
+            }
           }
         }
       }
@@ -686,7 +693,7 @@ void monitor_pump_callback(void)
       if ((millis() - pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_pump_on(F("# turning pump back on for timer switch\n"));
-        } else if ((millis() - pump_on_off_time) > 24UL * 3600UL * 1000UL) {
+        } else if ((millis() - pump_on_off_time) > periodic_filter_interval) {
           turn_pump_on(F("# periodic filtering\n"));
           manual_pump_request = true;
         }
@@ -820,7 +827,7 @@ void read_time_and_sensor_inputs_callback(void)
   if (pool_temperature1_F <= 0.0) {
     pool_temperature1_F = pool_temperature1_this_sample_F;
   }
-  pool_temperature1_F = alpha * pool_temperature1_this_sample_F + (1 - alpha) * pool_temperature1_F;
+  pool_temperature1_F = alpha * pool_temperature1_this_sample_F + (1.0 - alpha) * pool_temperature1_F;
 
   if (pool_temperature1_F < 32.0 || pool_temperature1_F > 105.0) {
     // Something is wrong with the sensor
@@ -840,7 +847,7 @@ void read_time_and_sensor_inputs_callback(void)
   if (pool_temperature2_F <= 0.0) {
     pool_temperature2_F = pool_temperature2_this_sample_F;
   }
-  pool_temperature2_F = alpha * pool_temperature2_this_sample_F + (1 - alpha) * pool_temperature2_F;
+  pool_temperature2_F = alpha * pool_temperature2_this_sample_F + (1.0 - alpha) * pool_temperature2_F;
 
   if (pool_temperature2_F < 32.0 || pool_temperature2_F > 105.0) {
     // Something is wrong with the sensor
@@ -857,7 +864,7 @@ void read_time_and_sensor_inputs_callback(void)
   if (outside_temperature_F <= 0.0) {
     outside_temperature_F = outside_temperature_this_sample_F;
   }
-  outside_temperature_F = alpha * outside_temperature_this_sample_F + (1 - alpha) * outside_temperature_F;
+  outside_temperature_F = alpha * outside_temperature_this_sample_F + (1.0 - alpha) * outside_temperature_F;
 
 
   if (outside_temperature_F < 0.0 || outside_temperature_F > 150.0) {
@@ -954,7 +961,7 @@ void print_status_to_serial_callback(void)
 void fail(const __FlashStringHelper *fail_message)
 {
   Serial.print(F("FAIL: "));
-  if (fail_message != (void *)0) {
+  if (fail_message != nullptr) {
     Serial.println(fail_message);
   }
   delay(500); // Give the serial link time to propogate the error message before execution ends
@@ -974,7 +981,7 @@ void monitor_serial_console_callback(void)
     if (l >= sizeof(command_buf) - 1) {
       Serial.println(F("# command buffer overflow"));
       command_buf[0] = '\0';
-      break;
+      continue;
     }
     if (received_char == '\n') {
       Serial.print(F("# Received: "));
@@ -1099,7 +1106,7 @@ void setup_i2c_bus(void)
            break;
           
          default:
-          if (quad_lv_relay == (void *)0) {
+          if (quad_lv_relay == nullptr) {
             Serial.print(F(" (unexpected, will guess that it is the Quad Qwiic Relay at the wrong address)\n"));
             quad_lv_relay = new Qwiic_Relay(address);
             if (quad_lv_relay->begin()) {
@@ -1129,7 +1136,7 @@ void setup_i2c_bus(void)
       Serial.println(F("# No I2C devices found\n"));
     }
   }
-  if (quad_lv_relay == (void *)0) {
+  if (quad_lv_relay == nullptr) {
     Serial.println(F("# Warning, quad relay board not found"));
   }
 }
@@ -1168,6 +1175,7 @@ void setup_arduino_time(void)
 */
 void setup(void)
 {
+  wdt_disable();
   setup_arduino_pins();
   analogReference(DEFAULT);
 
@@ -1216,6 +1224,7 @@ void setup(void)
   // run it now.
   turn_pump_on(F("# initial filtering\n"));
   manual_pump_request = true;
+  wdt_enable(WDTO_8S);  // 8 second watchdog
 }
 
 /*
@@ -1223,6 +1232,7 @@ void setup(void)
 */
 void loop(void)
 {
+  wdt_reset();  // Pet the watchdog
   // All code after setup() executes inside of tasks, so the only thing to do here is to call the task scheduler's execute() method.
   ts.execute();
 }
