@@ -31,7 +31,7 @@ const bool verbose_I2C = false;
 #define LV_RELAY_I2C_ADDR  (0x6D)                 // Default I2C address of the mechanical, low voltage, 4-relay board
 
 #define LV_RELAY_PUMP_12V                 (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
-#define LV_RELAY_UNUSED_12V               (2)     // Used to be for the boost pump relay coil, now unused˜
+#define LV_RELAY_BOOST_12V                (2)     // For the boost pump relay coil
 #define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)     // When energized, this powers the SSR that controls power to the 24VAC transformer
 #define LV_RELAY_DIVERTER_DIRECTION       (4)     // When this and the 24VAC transformer are enabled, this drives the diverter valve to roof mode.
 
@@ -58,7 +58,7 @@ Scheduler ts;
 // Speed at which we run the serial connection (both via USB and RS-485)
 #define SERIAL_BAUD (115200)
 
-typedef enum {m_normal, m_safe, m_pump, m_24vac, m_diverter, m_last} operating_mode_t;
+typedef enum {m_normal, m_safe, m_pump, m_boost, m_24vac, m_diverter, m_last} operating_mode_t;
 
 bool toggle_key_pressed = false;
 
@@ -92,6 +92,7 @@ char cbuf[60];
 
 bool manual_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long pump_on_off_time;        // Assigned millis() when main pump is switched on
+unsigned long boost_pump_on_off_time;
 const unsigned long max_diverter_power_on_time = 300 * 1000; // 5 minutes
 
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
@@ -132,7 +133,7 @@ void setup_arduino_pins(void)
   pinMode(3, INPUT_PULLUP);                          // Unconnected and unused input
   pinMode(4, INPUT_PULLUP);                          // Unconnected and unused input
  
- #define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator that is driven by the 'solarthermal' controller
+#define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator that is driven by the 'solarthermal' controller
   pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5.  A task polls for changes to this pin.
   
   pinMode(6, INPUT_PULLUP);                          // Unconnected and unused input
@@ -260,7 +261,7 @@ void check_free_memory(const __FlashStringHelper *caller)
 const char *operating_mode_to_string(operating_mode_t operating_mode) 
 {
   // m_pump, m_diverter
-  char *s[] = {"Normal", "Safe  ", "Main P", "24 VAC", "Divert"};
+  char *s[] = {"Normal", "Safe  ", "Main P", "Boost ", "24 VAC", "Divert"};
   if (operating_mode < m_last) {
     return s[operating_mode];
   }
@@ -356,17 +357,7 @@ void process_pressed_keys_callback(void)
 
       case m_safe:
         {
-          for (int i = 0 ; i < 50 ; i++) {
-            if (quad_lv_relay != (void *)0) {
-              quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
-            }
-            Serial.print(F("# unused relay="));
-            bool v = false;
-            if (quad_lv_relay != (void *)0) {
-              v = quad_lv_relay->getState(LV_RELAY_UNUSED_12V);
-            }
-            Serial.println(v);
-          }
+         
         }
         break;
 
@@ -374,6 +365,11 @@ void process_pressed_keys_callback(void)
         manual_pump_request = true;
         turn_pump_on(F("# main pump="));
         Serial.println(pump_is_on());
+        break;
+
+      case m_boost:
+        turn_boost_pump_on(F("# boost pump="));
+        Serial.println(boost_pump_is_on());
         break;
 
       
@@ -429,6 +425,11 @@ void process_pressed_keys_callback(void)
         Serial.println(pump_is_on());
         break;
 
+      case m_boost:
+        turn_boost_pump_off(F("# boost pump="));
+        Serial.println(boost_pump_is_on());
+        break;
+        
       case m_24vac:
         turn_diverter_valve_transformer_off();
         break;
@@ -484,18 +485,10 @@ void process_pressed_keys_callback(void)
           some_key_pressed = true;
           if (pump_is_on() == false) {
             turn_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
-            if (diverter_valve_is_sending_water_to_roof() == false) {
-              // To actually make the diverter valve turn, one must call
-              turn_diverter_valve_transformer_on();
-              set_diverter_valve_to_send_water_to_roof();
-            }
+            
           } 
-        } else {
-          // Logic in monitor_diverter_valve will turn the diverter valve back to pool-mode
-          // after a drain-down time.
-          // Logic in monitor_pool_pump will turn off the main pump
-          
-        }
+          turn_boost_pump_on(F("# Boost pump on"));
+        } 
       }
       last_timer_switch_on = timer_switch_on;
       timer_switch_on_time = millis();
@@ -567,6 +560,46 @@ bool pump_is_on(void)
   bool v = false;
   if (quad_lv_relay != (void *)0) {
     v = quad_lv_relay->getState(LV_RELAY_PUMP_12V);
+  }
+  return v;
+}
+
+void turn_boost_pump_on(const __FlashStringHelper *message)
+{
+  if (message != (void *)0) {
+    Serial.print(message);
+  }
+  if (boost_pump_is_on() == false) {
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOn(LV_RELAY_BOOST_12V);  
+    }
+    boost_pump_on_off_time = millis();
+    Serial.print(F("# turn_boost_pump_on(): "));
+    Serial.println(boost_pump_on_off_time);
+  }
+}
+
+void turn_boost_pump_off(const __FlashStringHelper *message)
+{
+  if (message != (void *)0) {
+    Serial.print(message);
+  }
+  if (pump_is_on()) {
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOff(LV_RELAY_BOOST_12V);
+    }
+    boost_pump_on_off_time = millis();
+    Serial.print(F("# turn_boost_pump_off(): "));
+    Serial.println(boost_pump_on_off_time);
+  }
+}
+
+bool boost_pump_is_on(void)
+{
+  
+  bool v = false;
+  if (quad_lv_relay != (void *)0) {
+    v = quad_lv_relay->getState(LV_RELAY_BOOST_12V);
   }
   return v;
 }
@@ -692,6 +725,9 @@ void monitor_pump_callback(void)
         }
       }
     }
+  }
+  if (boost_pump_is_on() && pressure_psi < 5) {
+    turn_boost_pump_off(F("# low pressure, turning boost pump off"));
   }
   check_free_memory(F("monitor_pump exit"));
 }
