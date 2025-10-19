@@ -31,8 +31,8 @@ const bool verbose_I2C = false;
 #include "SparkFun_Qwiic_Relay.h"
 #define LV_RELAY_I2C_ADDR  (0x6D)                 // Default I2C address of the mechanical, low voltage, 4-relay board
 
-#define LV_RELAY_PUMP_12V                 (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
-#define LV_RELAY_UNUSED_12V               (2)     // Used to be for the boost pump relay coil, now unused˜
+#define LV_RELAY_MAIN_PUMP_12V            (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
+#define LV_RELAY_BOOST_PUMP_12V           (2)     // For the boost pump relay coil
 #define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)     // When energized, this powers the SSR that controls power to the 24VAC transformer
 #define LV_RELAY_DIVERTER_DIRECTION       (4)     // When this and the 24VAC transformer are enabled, this drives the diverter valve to roof mode.
 
@@ -59,7 +59,7 @@ Scheduler ts;
 // Speed at which we run the serial connection (both via USB and RS-485)
 #define SERIAL_BAUD (115200)
 
-typedef enum {m_normal, m_safe, m_pump, m_24vac, m_diverter, m_last} operating_mode_t;
+typedef enum {m_normal, m_safe, m_pump, m_boost, m_24vac, m_diverter, m_last} operating_mode_t;
 
 bool toggle_key_pressed = false;
 
@@ -71,11 +71,11 @@ void print_status_to_serial_callback(void);
 void poll_keys_callback(void);
 void update_lcd_callback(void);
 
-void monitor_pump_callback(void);
+void monitor_main_pump_callback(void);
 //-------------------------------------------------------------------------------------
 const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
-const unsigned long max_pump_on_time = 3UL * 3600UL * 1000UL;
+const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
@@ -93,14 +93,15 @@ char cbuf[60];
 
 /*****************************************************************************************************/
 
-bool manual_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
-unsigned long pump_on_off_time;        // Assigned millis() when main pump is switched on
+bool manual_main_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
+unsigned long main_pump_on_off_time;        // Assigned millis() when main pump is switched on
+unsigned long boost_pump_on_off_time;
 const unsigned long max_diverter_power_on_time = 300 * 1000UL; // 5 minutes
 
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
 unsigned long diverter_valve_in_roof_position_time; // Assigned millis() when valve goes to send-to-roof position
 
-Task monitor_pump_control(TASK_SECOND, TASK_FOREVER, &monitor_pump_callback, &ts, true);
+Task monitor_main_pump_control(TASK_SECOND, TASK_FOREVER, &monitor_main_pump_callback, &ts, true);
 operating_mode_t operating_mode;
 
 unsigned long time_entering_diag_mode;  // Assigned millis() when any diag mode is entered
@@ -135,7 +136,7 @@ void setup_arduino_pins(void)
   pinMode(3, INPUT_PULLUP);                          // Unconnected and unused input
   pinMode(4, INPUT_PULLUP);                          // Unconnected and unused input
  
- #define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator that is driven by the 'solarthermal' controller
+#define DIVERTER_REQUEST_INPUT_PIN (5)              // Fed by an optoisolator that is driven by the 'solarthermal' controller
   pinMode(DIVERTER_REQUEST_INPUT_PIN, INPUT_PULLUP); // D5/PD5.  A task polls for changes to this pin.
   
   pinMode(6, INPUT_PULLUP);                          // Unconnected and unused input
@@ -263,7 +264,7 @@ void check_free_memory(const __FlashStringHelper *caller)
 const char *operating_mode_to_string(operating_mode_t operating_mode) 
 {
   // m_pump, m_diverter
-  char *s[] = {"Normal", "Safe  ", "Main P", "24 VAC", "Divert"};
+  char *s[] = {"Normal", "Safe  ", "Main P", "Boost ", "24 VAC", "Divert"};
   if (operating_mode < m_last) {
     return s[operating_mode];
   }
@@ -364,24 +365,18 @@ void process_pressed_keys_callback(void)
 
       case m_safe:
         {
-          for (int i = 0 ; i < 50 ; i++) {
-            if (quad_lv_relay != nullptr) {
-              quad_lv_relay->toggleRelay(LV_RELAY_UNUSED_12V);
-            }
-            Serial.print(F("# unused relay="));
-            bool v = false;
-            if (quad_lv_relay != nullptr) {
-              v = quad_lv_relay->getState(LV_RELAY_UNUSED_12V);
-            }
-            Serial.println(v);
-          }
         }
         break;
 
       case m_pump:
-        manual_pump_request = true;
-        turn_pump_on(F("# main pump="));
-        Serial.println(pump_is_on());
+        manual_main_pump_request = true;
+        turn_main_pump_on(F("# main pump="));
+        Serial.println(main_pump_is_on());
+        break;
+
+      case m_boost:
+        turn_boost_pump_on(F("# boost pump="));
+        Serial.println(boost_pump_is_on());
         break;
 
       
@@ -432,11 +427,16 @@ void process_pressed_keys_callback(void)
         break;
 
       case m_pump:
-        manual_pump_request = false;
-        turn_pump_off(F("# main pump="));
-        Serial.println(pump_is_on());
+        manual_main_pump_request = false;
+        turn_main_pump_off(F("# main pump="));
+        Serial.println(main_pump_is_on());
         break;
 
+      case m_boost:
+        turn_boost_pump_off(F("# boost pump="));
+        Serial.println(boost_pump_is_on());
+        break;
+        
       case m_24vac:
         turn_diverter_valve_transformer_off();
         break;
@@ -471,12 +471,12 @@ void process_pressed_keys_callback(void)
       if ((millis() - last_red_button_press_time) > debounce_delay) {
         some_key_pressed = true;
         if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
-          if (pump_is_on()) {
-            manual_pump_request = false;
-            turn_pump_off(F("# Pool pump is on, turning it off due to press of red button\n"));
+          if (main_pump_is_on()) {
+            manual_main_pump_request = false;
+            turn_main_pump_off(F("# Pool pump is on, turning it off due to press of red button\n"));
           } else {
-            manual_pump_request = true;
-            turn_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
+            manual_main_pump_request = true;
+            turn_main_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
           }
         }
       }
@@ -490,20 +490,12 @@ void process_pressed_keys_callback(void)
       if ((millis() - timer_switch_on_time) > debounce_delay) {
         if (timer_switch_on) { // While timer switch is closed, run main pump
           some_key_pressed = true;
-          if (pump_is_on() == false) {
-            turn_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
-            if (diverter_valve_is_sending_water_to_roof() == false) {
-              // To actually make the diverter valve turn, one must call
-              turn_diverter_valve_transformer_on();
-              set_diverter_valve_to_send_water_to_roof();
-            }
+          if (main_pump_is_on() == false) {
+            turn_main_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
+            
           } 
-        } else {
-          // Logic in monitor_diverter_valve will turn the diverter valve back to pool-mode
-          // after a drain-down time.
-          // Logic in monitor_pool_pump will turn off the main pump
-          
-        }
+          turn_boost_pump_on(F("# Boost pump on"));
+        } 
       }
       last_timer_switch_on = timer_switch_on;
       timer_switch_on_time = millis();
@@ -516,7 +508,7 @@ void process_pressed_keys_callback(void)
         if (diverter_valve_request) {
           turn_diverter_valve_transformer_on();
           set_diverter_valve_to_send_water_to_roof();
-          turn_pump_on(F("# diverter request present\n"));
+          turn_main_pump_on(F("# diverter request present\n"));
 
         } else {
           // Logic in monitor_diverter_valve() will turn the main pump if it should be off and
@@ -539,42 +531,82 @@ void process_pressed_keys_callback(void)
 }
 // bool panels_draining_pool_water = false;
 
-void turn_pump_on(const __FlashStringHelper *message)
+void turn_main_pump_on(const __FlashStringHelper *message)
 {
   if (message != nullptr) {
     Serial.print(message);
   }
-  if (pump_is_on() == false) {
+  if (main_pump_is_on() == false) {
     if (quad_lv_relay != nullptr) {
-      quad_lv_relay->turnRelayOn(LV_RELAY_PUMP_12V);  
+      quad_lv_relay->turnRelayOn(LV_RELAY_MAIN_PUMP_12V);  
     }
-    pump_on_off_time = millis();
-    Serial.print(F("# turn_pump_on(): "));
-    Serial.println(pump_on_off_time);
+    main_pump_on_off_time = millis();
+    Serial.print(F("# turn_main_pump_on(): "));
+    Serial.println(main_pump_on_off_time);
   }
 }
 
-void turn_pump_off(const __FlashStringHelper *message)
+void turn_main_pump_off(const __FlashStringHelper *message)
 {
   if (message != nullptr) {
     Serial.print(message);
   }
-  if (pump_is_on()) {
+  if (main_pump_is_on()) {
     if (quad_lv_relay != nullptr) {
-      quad_lv_relay->turnRelayOff(LV_RELAY_PUMP_12V);
+      quad_lv_relay->turnRelayOff(LV_RELAY_MAIN_PUMP_12V);
     }
-    pump_on_off_time = millis();
-    Serial.print(F("# turn_pump_off(): "));
-    Serial.println(pump_on_off_time);
+    main_pump_on_off_time = millis();
+    Serial.print(F("# turn_main_pump_off(): "));
+    Serial.println(main_pump_on_off_time);
   }
 }
 
-bool pump_is_on(void)
+bool main_pump_is_on(void)
 {
   
   bool v = false;
   if (quad_lv_relay != nullptr) {
-    v = quad_lv_relay->getState(LV_RELAY_PUMP_12V);
+    v = quad_lv_relay->getState(LV_RELAY_MAIN_PUMP_12V);
+  }
+  return v;
+}
+
+void turn_boost_pump_on(const __FlashStringHelper *message)
+{
+  if (message != (void *)0) {
+    Serial.print(message);
+  }
+  if (boost_pump_is_on() == false) {
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOn(LV_RELAY_BOOST_PUMP_12V);  
+    }
+    boost_pump_on_off_time = millis();
+    Serial.print(F("# turn_boost_pump_on(): "));
+    Serial.println(boost_pump_on_off_time);
+  }
+}
+
+void turn_boost_pump_off(const __FlashStringHelper *message)
+{
+  if (message != (void *)0) {
+    Serial.print(message);
+  }
+  if (boost_pump_is_on()) {
+    if (quad_lv_relay != (void *)0) {
+      quad_lv_relay->turnRelayOff(LV_RELAY_BOOST_PUMP_12V);
+    }
+    boost_pump_on_off_time = millis();
+    Serial.print(F("# turn_boost_pump_off(): "));
+    Serial.println(boost_pump_on_off_time);
+  }
+}
+
+bool boost_pump_is_on(void)
+{
+  
+  bool v = false;
+  if (quad_lv_relay != (void *)0) {
+    v = quad_lv_relay->getState(LV_RELAY_BOOST_PUMP_12V);
   }
   return v;
 }
@@ -654,51 +686,54 @@ void set_diverter_valve_to_return_water_to_pool(void)
 }
 
 
-void monitor_pump_callback(void)
+void monitor_main_pump_callback(void)
 {
   check_free_memory(F("monitor_pump"));
   if (operating_mode == m_normal) {
-    if (pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
+    if (main_pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
       
-      if ((millis() - pump_on_off_time) > max_pump_on_time) {
+      if ((millis() - main_pump_on_off_time) > max_main_pump_on_time) {
         // Turn off the pump
-        turn_pump_off(F("# turning off pool pump due to time limit\n"));
-        manual_pump_request = false; // Cancel request
+        turn_main_pump_off(F("# turning off pool pump due to time limit\n"));
+        manual_main_pump_request = false; // Cancel request
       } else {
         float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
 
         if (pressure_psi > max_psi) {
-          turn_pump_off(F("# alert turning off pump due to overpressure: PSI="));
+          turn_main_pump_off(F("# alert turning off pump due to overpressure: PSI="));
           Serial.println(pressure_psi);
-          manual_pump_request = false;
+          manual_main_pump_request = false;
         } else if (!diverter_valve_request) {
           // If we are not being asked to send water to the roof, the pool-cleaner timer switch
           // is not requesting pool cleaning, and this is not the time to filter the pool water
           // by running the pump, then turn it off.
-          if (!timer_switch_on && !manual_pump_request) {
-            turn_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
+          if (!timer_switch_on && !manual_main_pump_request) {
+            turn_main_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
           } else {
             if (diverter_valve_is_sending_water_to_roof() &&
             (millis() - last_diverter_valve_request_change) < 60 * 1000UL) {
               // Although we have other reasons to run the pump, we need to turn it off to let the panels
               // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
               // if the the diverter request just went away within the last minute.
-              turn_pump_off(F("# turning off pump to let panels drain\n"));
-              manual_pump_request = false;
+              turn_main_pump_off(F("# turning off pump to let panels drain\n"));
+              manual_main_pump_request = false;
             }
           }
         }
       }
     } else { // Pump is not on, see if it should be, but only after a twenty minute delay for any draining needed
-      if ((millis() - pump_on_off_time) > drain_down_time) {
+      if ((millis() - main_pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
-          turn_pump_on(F("# turning pump back on for timer switch\n"));
-        } else if ((millis() - pump_on_off_time) > periodic_filter_interval) {
-          turn_pump_on(F("# periodic filtering\n"));
-          manual_pump_request = true;
+          turn_main_pump_on(F("# turning pump back on for timer switch\n"));
+        } else if ((millis() - main_pump_on_off_time) > periodic_filter_interval) {
+          turn_main_pump_on(F("# periodic filtering\n"));
+          manual_main_pump_request = true;
         }
       }
     }
+  }
+  if (boost_pump_is_on() && pressure_psi < 5) {
+    turn_boost_pump_off(F("# low pressure, turning boost pump off"));
   }
   check_free_memory(F("monitor_pump exit"));
 }
@@ -710,8 +745,8 @@ void monitor_diverter_valve_callback(void)
     // If the main pump has been off for two minutes and the diverter valve is set to send
     // water to the roof, we assume that the panels have had time to drain and we
     // turn the diverter valve back to pool mode
-    if (!pump_is_on() && diverter_valve_is_sending_water_to_roof()) {
-      if ((millis() - pump_on_off_time) > drain_down_time) {
+    if (!main_pump_is_on() && diverter_valve_is_sending_water_to_roof()) {
+      if ((millis() - main_pump_on_off_time) > drain_down_time) {
         turn_diverter_valve_transformer_on();
         set_diverter_valve_to_return_water_to_pool();
       }
@@ -762,21 +797,21 @@ void update_lcd_callback(void)
     dtostrf(pressure_psi, 4, 1, pressure_psi_str);
     snprintf(cbuf, sizeof(cbuf), "%s PSI  ", pressure_psi_str);
     lcd->print(cbuf);
-    float pump_runtime_in_seconds = 0.0;
+    float main_pump_runtime_in_seconds = 0.0;
     float diverter_valve_in_roof_position_in_seconds = 0.0;
 
     // Fourth LCD Line
     lcd->setCursor(0, 3);
     
-    if (pump_is_on()) {
-      pump_runtime_in_seconds = (millis() - pump_on_off_time) / 1000.0;
+    if (main_pump_is_on()) {
+      main_pump_runtime_in_seconds = (millis() - main_pump_on_off_time) / 1000.0;
     } 
     if (diverter_valve_is_sending_water_to_roof()) {
       diverter_valve_in_roof_position_in_seconds = (millis() - diverter_valve_in_roof_position_time) / 1000.0;
     }
     snprintf(cbuf, sizeof(cbuf), "%3u:%02u %3u:%02u", 
-             (unsigned)(pump_runtime_in_seconds / 60.0), 
-             (unsigned)pump_runtime_in_seconds % 60,
+             (unsigned)(main_pump_runtime_in_seconds / 60.0), 
+             (unsigned)main_pump_runtime_in_seconds % 60,
              (unsigned)(diverter_valve_in_roof_position_in_seconds / 60.0),
              (unsigned)diverter_valve_in_roof_position_in_seconds % 60);
              
@@ -894,7 +929,7 @@ void print_status_to_serial_callback(void)
   static unsigned line_counter = 0;
   static unsigned skipped_record_counter = 0;
 
-  bool pump = pump_is_on();
+  bool pump = main_pump_is_on();
   bool to_roof = diverter_valve_is_sending_water_to_roof();
   unsigned records_to_skip = (operating_mode == m_normal) ? 600 : 60;
 
@@ -1214,7 +1249,7 @@ void setup(void)
   // then ensure that the diverter valve is sending water back to the pool.
   
   diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
-  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request && !pump_is_on()) {
+  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request && !main_pump_is_on()) {
     Serial.println(F("# Turning diverter valve to pool on startup"));
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
@@ -1222,8 +1257,8 @@ void setup(void)
 
   // On reboot since we don't know how long it has been since the pool pump ran to filter pool water
   // run it now.
-  turn_pump_on(F("# initial filtering\n"));
-  manual_pump_request = true;
+  turn_main_pump_on(F("# initial filtering\n"));
+  manual_main_pump_request = true;
   wdt_enable(WDTO_8S);  // 8 second watchdog
 }
 
