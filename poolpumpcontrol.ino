@@ -752,7 +752,7 @@ void monitor_boost_pump_callback(void)
   } else if (boost_pump_is_on() && (main_pump_is_on() == false || pressure_psi < 5)) {
     turn_boost_pump_off(F("# low pressure, turning boost pump off"));
   }
-  if ((millis() - boost_pump_on_off_time) > max_boost_pump_on_time) {
+  if (boost_pump_is_on() && (millis() - boost_pump_on_off_time) > max_boost_pump_on_time) {
     // Turn off the boost pump
     turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
   }
