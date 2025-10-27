@@ -268,6 +268,18 @@ void check_free_memory(const __FlashStringHelper *caller)
   }
 }
 
+// Helper function to format temperature for display
+// Returns "  -" if sensor has failed, otherwise returns formatted temperature
+void format_temperature(float temp_F, char *buf, size_t buf_size) {
+  if (temp_F == SENSOR_ERROR) {
+    strncpy(buf, "  -", buf_size);
+    buf[buf_size - 1] = '\0';
+  } else {
+    // Format as "XXX" (3 digits, right-aligned)
+    snprintf(buf, buf_size, "%3d", (int)temp_F);
+  }
+}
+
 // Returns a string that desribes the current diag mode.  For some reason, it stopped working to pass
 // in the diag mode, but since we always passed in the global variable "diag_mode", just commenting out
 // the parameter here, and the passed arguments where this is called allowed this to compile again.
@@ -852,12 +864,16 @@ void update_lcd_callback(void)
       valve_cbuf,
       operating_mode_to_string(operating_mode));
     lcd->print(cbuf);
-    
+
     // Second LCD line
+    char pt1_lcd[5], pt2_lcd[5], ot_lcd[5];
+    format_temperature(pool_temperature1_F, pt1_lcd, sizeof(pt1_lcd));
+    format_temperature(pool_temperature2_F, pt2_lcd, sizeof(pt2_lcd));
+    format_temperature(outside_temperature_F, ot_lcd, sizeof(ot_lcd));
+
     lcd->setCursor(0, 1);
-    snprintf(cbuf, sizeof(cbuf), "%3dF %3dF %3dF", 
-             (int)pool_temperature1_F, (int)pool_temperature2_F, (int)outside_temperature_F);
-             
+    snprintf(cbuf, sizeof(cbuf), "%sF %sF %sF",
+             pt1_lcd, pt2_lcd, ot_lcd);
     lcd->print(cbuf);
     
     // Third LCD Line
@@ -1046,17 +1062,18 @@ void print_status_to_serial_callback(void)
                second(arduino_time));
     Serial.print(cbuf);
 
+    // Format temperatures, showing "  -" for failed sensors
     char pressure_psi_str[8];
     dtostrf(pressure_psi, 4, 1, pressure_psi_str);
 
     char pt1_str[8];
-    dtostrf(pool_temperature1_F, 4, 1, pt1_str);
+    format_temperature(pool_temperature1_F, pt1_str, sizeof(pt1_str));
 
     char pt2_str[8];
-    dtostrf(pool_temperature2_F, 4, 1, pt2_str);
+    format_temperature(pool_temperature2_F, pt2_str, sizeof(pt2_str));
 
     char ot_str[8];
-    dtostrf(outside_temperature_F, 4, 1, ot_str);
+    format_temperature(outside_temperature_F, ot_str, sizeof(ot_str));
     
     snprintf(cbuf, sizeof(cbuf), " %s %s %s %s %3u %3u %3u  %3u", 
              pt1_str, pt2_str, ot_str, pressure_psi_str,
