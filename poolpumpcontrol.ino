@@ -1048,7 +1048,7 @@ void print_status_to_serial_callback(void)
    skipped_record_counter = 0;
       
     if (line_counter == 0) {
-        Serial.println(F("# Date     Time       Pl1  Pl2  Out  PSI  Pmp Bst Req Roof Mode"));
+        Serial.println(F("# Date     Time      Pl1 Pl2 Out PSI  Pmp Bst Req Roof Mode"));
         line_counter = 20;
       } else {
         line_counter--;
