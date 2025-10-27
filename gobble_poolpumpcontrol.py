@@ -36,10 +36,15 @@ baud_rate = 115200
 
 ser = serial.Serial(port, baud_rate, timeout=1)
 
-# Reset Arduino (toggle DTR)
-ser.setDTR(False)
-time.sleep(1)
-ser.setDTR(True)
+# Optional: Reset Arduino on start (commented out to preserve state)
+# WARNING: Resetting the Arduino loses all state including:
+#          - Pump on/off timers
+#          - Drain-down progress
+#          - Manual pump requests
+# Uncomment only if you need to force a clean restart
+# ser.setDTR(False)
+# time.sleep(1)
+# ser.setDTR(True)
 linecount = 0
 
 def is_valid_data_line(line):
