@@ -76,10 +76,11 @@ void monitor_boost_pump_callback(void);
 //-------------------------------------------------------------------------------------
 const unsigned long drain_down_time = 5 * 60 * 1000UL; // 5 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
+const unsigned long periodic_filter_duration = 2UL * 3600UL * 1000UL;  // Run for 2 hours during daily cleaning
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
 const unsigned long periodic_boost_interval = 24UL * 3600UL * 1000UL;  // Run boost pump once per day
-const unsigned long periodic_boost_duration = 30UL * 60UL * 1000UL;    // Run for 30 minutes
+const unsigned long periodic_boost_duration = 45UL * 60UL * 1000UL;    // Run for 45 minutes
 
 #define SENSOR_ERROR (-999.0)  // Sentinel value for failed temperature sensors
 
@@ -102,7 +103,9 @@ char cbuf[60];
 bool manual_main_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long main_pump_on_off_time;        // Assigned millis() when main pump is switched on
 unsigned long boost_pump_on_off_time;
-bool periodic_boost_request;                 // Set true when periodic boost pump operation is needed
+bool periodic_filter_request;               // Set true when periodic filtering operation is needed (daily at noon)
+bool periodic_boost_request;                // Set true when periodic boost pump operation is needed
+int last_periodic_filter_day;               // Day of month when last periodic filtering was started
 const unsigned long max_diverter_power_on_time = 300 * 1000UL; // 5 minutes
 
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
@@ -732,10 +735,18 @@ void monitor_main_pump_callback(void)
   check_free_memory(F("monitor_pump"));
   if (operating_mode == m_normal) {
     if (main_pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
-      
-      if ((millis() - main_pump_on_off_time) > max_main_pump_on_time) {
+
+      // Determine appropriate time limit based on whether this is periodic filtering or other operation
+      unsigned long pump_time_limit = periodic_filter_request ? periodic_filter_duration : max_main_pump_on_time;
+
+      if ((millis() - main_pump_on_off_time) > pump_time_limit) {
         // Turn off the pump
-        turn_main_pump_off(F("# turning off pool pump due to time limit\n"));
+        if (periodic_filter_request) {
+          turn_main_pump_off(F("# turning off pool pump after 2-hour periodic filtering\n"));
+          periodic_filter_request = false;
+        } else {
+          turn_main_pump_off(F("# turning off pool pump due to time limit\n"));
+        }
         manual_main_pump_request = false; // Cancel request
       } else {
         float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
@@ -766,9 +777,16 @@ void monitor_main_pump_callback(void)
       if ((millis() - main_pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_main_pump_on(F("# turning pump back on for timer switch\n"));
-        } else if ((millis() - main_pump_on_off_time) > periodic_filter_interval) {
-          turn_main_pump_on(F("# periodic filtering\n"));
-          manual_main_pump_request = true;
+        } else {
+          // Check if it's noon and we haven't run periodic filtering today
+          int current_hour = hour(arduino_time);
+          int current_day = day(arduino_time);
+          if (current_hour == 12 && current_day != last_periodic_filter_day) {
+            periodic_filter_request = true;
+            last_periodic_filter_day = current_day;
+            turn_main_pump_on(F("# periodic filtering at noon\n"));
+            manual_main_pump_request = true;
+          }
         }
       }
     }
@@ -813,7 +831,7 @@ void monitor_boost_pump_callback(void)
   if (boost_pump_is_on() && (millis() - boost_pump_on_off_time) > boost_time_limit) {
     // Turn off the boost pump
     if (periodic_boost_request) {
-      turn_boost_pump_off(F("# turning off boost pump after periodic 30-minute run\n"));
+      turn_boost_pump_off(F("# turning off boost pump after periodic 45-minute run\n"));
       periodic_boost_request = false;
     } else {
       turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
@@ -1355,14 +1373,6 @@ void setup(void)
     set_diverter_valve_to_return_water_to_pool();
   }
 
-  // On reboot since we don't know how long it has been since the pool pump ran to filter pool water
-  // run it now.  This also makes testing quicker.
-  turn_main_pump_on(F("# initial filtering\n"));
-
-  // Ditto for the boost pump
-  periodic_boost_request = true;
-  
-  manual_main_pump_request = true;
   wdt_enable(WDTO_8S);  // 8 second watchdog
 }
 
