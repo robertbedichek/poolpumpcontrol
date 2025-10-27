@@ -74,7 +74,7 @@ void update_lcd_callback(void);
 void monitor_main_pump_callback(void);
 void monitor_boost_pump_callback(void);
 //-------------------------------------------------------------------------------------
-const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
+const unsigned long drain_down_time = 5 * 60 * 1000UL; // 5 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
