@@ -909,7 +909,17 @@ void read_time_and_sensor_inputs_callback(void)
     pool_temperature2_F = 0;
   }
 
-  pool_temperature_F = (pool_temperature1_F + pool_temperature2_F) / 2.0;
+  // Average of the two pool temperatures, or just one of them if the other is out of range
+  if (pool_temperature1_F <= 0.0 && pool_temperature2_F <= 0.0) {
+    pool_temperature_F = 0.0; // Both sensors failed
+  } else if (pool_temperature1_F <= 0.0) {
+    pool_temperature_F = pool_temperature2_F; // Use only sensor 2
+  } else if (pool_temperature2_F <= 0.0) {
+    pool_temperature_F = pool_temperature1_F; // Use only sensor 1
+  } else {
+    // Both sensors are good, use average
+    pool_temperature_F = (pool_temperature1_F + pool_temperature2_F) / 2.0;
+  }
 
   float outside_temperature_millivolts = (float)raw_outside_temperature_volts * 5000.0 / 1023.0;
   float outside_temperature_C = (outside_temperature_millivolts - 500.0) / 10.0;
