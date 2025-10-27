@@ -1336,8 +1336,12 @@ void setup(void)
   }
 
   // On reboot since we don't know how long it has been since the pool pump ran to filter pool water
-  // run it now.
+  // run it now.  This also makes testing quicker.
   turn_main_pump_on(F("# initial filtering\n"));
+
+  // Ditto for the boost pump
+  periodic_boost_request = true;
+  
   manual_main_pump_request = true;
   wdt_enable(WDTO_8S);  // 8 second watchdog
 }
