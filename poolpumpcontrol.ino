@@ -398,7 +398,7 @@ void process_pressed_keys_callback(void)
         break;
 
       case m_boost:
-        turn_boost_pump_on(F("# boost pump="));
+        turn_boost_pump_on(F("diag mode, boost pump="));
         Serial.println(boost_pump_is_on());
         break;
 
@@ -613,9 +613,7 @@ bool main_pump_is_on(void)
 
 void turn_boost_pump_on(const __FlashStringHelper *message)
 {
-  if (message != (void *)0) {
-    Serial.print(message);
-  }
+  
   // Do not try to turn on the boost pump unless the main pump is on and the boost pump is off
   if (main_pump_is_on() && boost_pump_is_on() == false) {
     if (quad_lv_relay != (void *)0) {
@@ -623,7 +621,10 @@ void turn_boost_pump_on(const __FlashStringHelper *message)
     }
     boost_pump_on_off_time = millis();
     Serial.print(F("# turn_boost_pump_on(): "));
-    Serial.println(boost_pump_on_off_time);
+    if (message != (void *)0) {
+      Serial.print(message);
+    }
+    Serial.println();
   }
 }
 
@@ -794,10 +795,10 @@ void monitor_boost_pump_callback(void)
     // Turn on boost pump when conditions are met (timer switch OR periodic request)
     if (main_pump_is_on() && pressure_psi >= 5 && boost_pump_is_on() == false) {
       if (timer_switch_on) {
-        turn_boost_pump_on(F("# timer switch requesting boost pump"));
+        turn_boost_pump_on(F("timer switch request"));
         periodic_boost_request = false; // Timer switch overrides periodic
       } else if (periodic_boost_request) {
-        turn_boost_pump_on(F("# periodic boost pump operation"));
+        turn_boost_pump_on(F("periodic operation"));
       }
     }
 
