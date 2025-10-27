@@ -78,6 +78,8 @@ const unsigned long drain_down_time = 20 * 60 * 1000UL; // 20 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
+const unsigned long periodic_boost_interval = 24UL * 3600UL * 1000UL;  // Run boost pump once per day
+const unsigned long periodic_boost_duration = 30UL * 60UL * 1000UL;    // Run for 30 minutes
 
 #define SENSOR_ERROR (-999.0)  // Sentinel value for failed temperature sensors
 
@@ -100,6 +102,7 @@ char cbuf[60];
 bool manual_main_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long main_pump_on_off_time;        // Assigned millis() when main pump is switched on
 unsigned long boost_pump_on_off_time;
+bool periodic_boost_request;                 // Set true when periodic boost pump operation is needed
 const unsigned long max_diverter_power_on_time = 300 * 1000UL; // 5 minutes
 
 unsigned long diverter_valve_transformer_on_time;  // Assigned millis() when valve transformer is turned on
@@ -763,14 +766,45 @@ void monitor_main_pump_callback(void)
 
 void monitor_boost_pump_callback(void)
 {
-  if (main_pump_is_on() && timer_switch_on && pressure_psi >= 5 && boost_pump_is_on() == false) {
-    turn_boost_pump_on(F("# timer switch requesting boost pump"));
-  } else if (boost_pump_is_on() && (main_pump_is_on() == false || pressure_psi < 5)) {
-    turn_boost_pump_off(F("# low pressure, turning boost pump off"));
+  if (operating_mode == m_normal) {
+    // Check if it's time for periodic boost pump operation (once per day)
+    if (!boost_pump_is_on() &&
+        !timer_switch_on &&
+        (millis() - boost_pump_on_off_time) > periodic_boost_interval) {
+      periodic_boost_request = true;
+      Serial.println(F("# Periodic boost pump requested"));
+      // Ensure main pump is on before we can run boost pump
+      if (!main_pump_is_on()) {
+        turn_main_pump_on(F("# turning on main pump for periodic boost operation\n"));
+      }
+    }
+
+    // Turn on boost pump when conditions are met (timer switch OR periodic request)
+    if (main_pump_is_on() && pressure_psi >= 5 && boost_pump_is_on() == false) {
+      if (timer_switch_on) {
+        turn_boost_pump_on(F("# timer switch requesting boost pump"));
+        periodic_boost_request = false; // Timer switch overrides periodic
+      } else if (periodic_boost_request) {
+        turn_boost_pump_on(F("# periodic boost pump operation"));
+      }
+    }
+
+    if (boost_pump_is_on() && (main_pump_is_on() == false || pressure_psi < 5)) {
+      turn_boost_pump_off(F("# low pressure, turning boost pump off"));
+      periodic_boost_request = false;
+    }
   }
-  if (boost_pump_is_on() && (millis() - boost_pump_on_off_time) > max_boost_pump_on_time) {
+
+  // Check time limits
+  unsigned long boost_time_limit = periodic_boost_request ? periodic_boost_duration : max_boost_pump_on_time;
+  if (boost_pump_is_on() && (millis() - boost_pump_on_off_time) > boost_time_limit) {
     // Turn off the boost pump
-    turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
+    if (periodic_boost_request) {
+      turn_boost_pump_off(F("# turning off boost pump after periodic 30-minute run\n"));
+      periodic_boost_request = false;
+    } else {
+      turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
+    }
   }
 }
 
