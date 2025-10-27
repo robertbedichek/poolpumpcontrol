@@ -79,6 +79,8 @@ const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
 
+#define SENSOR_ERROR (-999.0)  // Sentinel value for failed temperature sensors
+
 // Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
 bool diverter_valve_request; 
 unsigned long last_diverter_valve_request_change;  // Value of millis() the last time the input from the solarthermal controller changed.
@@ -893,14 +895,14 @@ void read_time_and_sensor_inputs_callback(void)
 
   // EMA filter
   const float alpha = 0.08;
-  if (pool_temperature1_F <= 0.0) {
+  if (pool_temperature1_F <= SENSOR_ERROR) {
     pool_temperature1_F = pool_temperature1_this_sample_F;
   }
   pool_temperature1_F = alpha * pool_temperature1_this_sample_F + (1.0 - alpha) * pool_temperature1_F;
 
   if (pool_temperature1_F < 32.0 || pool_temperature1_F > 105.0) {
     // Something is wrong with the sensor
-    pool_temperature1_F = 0;
+    pool_temperature1_F = SENSOR_ERROR;
   }
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
@@ -913,22 +915,22 @@ void read_time_and_sensor_inputs_callback(void)
   float pool_temperature2_this_sample_F = pool_temperature2_C * 9.0 / 5.0 + 32.0;
 
   // EMA filter
-  if (pool_temperature2_F <= 0.0) {
+  if (pool_temperature2_F <= SENSOR_ERROR) {
     pool_temperature2_F = pool_temperature2_this_sample_F;
   }
   pool_temperature2_F = alpha * pool_temperature2_this_sample_F + (1.0 - alpha) * pool_temperature2_F;
 
   if (pool_temperature2_F < 32.0 || pool_temperature2_F > 105.0) {
     // Something is wrong with the sensor
-    pool_temperature2_F = 0;
+    pool_temperature2_F = SENSOR_ERROR;
   }
 
   // Average of the two pool temperatures, or just one of them if the other is out of range
-  if (pool_temperature1_F <= 0.0 && pool_temperature2_F <= 0.0) {
-    pool_temperature_F = 0.0; // Both sensors failed
-  } else if (pool_temperature1_F <= 0.0) {
+  if (pool_temperature1_F == SENSOR_ERROR && pool_temperature2_F == SENSOR_ERROR) {
+    pool_temperature_F = SENSOR_ERROR; // Both sensors failed
+  } else if (pool_temperature1_F == SENSOR_ERROR) {
     pool_temperature_F = pool_temperature2_F; // Use only sensor 2
-  } else if (pool_temperature2_F <= 0.0) {
+  } else if (pool_temperature2_F == SENSOR_ERROR) {
     pool_temperature_F = pool_temperature1_F; // Use only sensor 1
   } else {
     // Both sensors are good, use average
@@ -940,14 +942,14 @@ void read_time_and_sensor_inputs_callback(void)
 
   // Convert to degrees F
   float outside_temperature_this_sample_F = outside_temperature_C * 9.0 / 5.0 + 32.0;
-  if (outside_temperature_F <= 0.0) {
+  if (outside_temperature_F <= SENSOR_ERROR) {
     outside_temperature_F = outside_temperature_this_sample_F;
   }
   outside_temperature_F = alpha * outside_temperature_this_sample_F + (1.0 - alpha) * outside_temperature_F;
 
 
   if (outside_temperature_F < 0.0 || outside_temperature_F > 150.0) {
-    outside_temperature_F = 0;
+    outside_temperature_F = SENSOR_ERROR;
   }
   float pressure_volts = raw_pressure_volts * 5.0 / 1023.0;
   pressure_volts -= 0.29;   // Pressure sensor reads 0.29 volts when pressure is zero
