@@ -1026,6 +1026,7 @@ void print_status_to_serial_callback(void)
   static unsigned skipped_record_counter = 0;
 
   bool pump = main_pump_is_on();
+  bool boost = boost_pump_is_on();
   bool to_roof = diverter_valve_is_sending_water_to_roof();
   unsigned records_to_skip = (operating_mode == m_normal) ? 600 : 60;
 
@@ -1046,7 +1047,7 @@ void print_status_to_serial_callback(void)
    skipped_record_counter = 0;
       
     if (line_counter == 0) {
-        Serial.println(F("# Date     Time       Pl1  Pl2  Out  PSI  Pmp Req Roof Mode"));
+        Serial.println(F("# Date     Time       Pl1  Pl2  Out  PSI  Pmp Bst Req Roof Mode"));
         line_counter = 20;
       } else {
         line_counter--;
@@ -1075,9 +1076,10 @@ void print_status_to_serial_callback(void)
     char ot_str[8];
     format_temperature(outside_temperature_F, ot_str, sizeof(ot_str));
     
-    snprintf(cbuf, sizeof(cbuf), " %s %s %s %s %3u %3u %3u  %3u", 
+    snprintf(cbuf, sizeof(cbuf), " %s %s %s %s %3u %3u %3u %3u  %3u",
              pt1_str, pt2_str, ot_str, pressure_psi_str,
              pump,
+             boost,
              diverter_valve_request,
              to_roof,
              (unsigned)operating_mode);
