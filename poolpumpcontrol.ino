@@ -481,8 +481,15 @@ void process_pressed_keys_callback(void)
             manual_main_pump_request = false;
             turn_main_pump_off(F("# Pool pump is on, turning it off due to press of red button\n"));
           } else {
-            manual_main_pump_request = true;
-            turn_main_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
+            // Check if we're in drain-down period (valve in roof mode, waiting for pool piping to drain)
+            if (diverter_valve_is_sending_water_to_roof() &&
+                !diverter_valve_request &&
+                (millis() - main_pump_on_off_time) < drain_down_time) {
+              Serial.println(F("# Red button: cannot turn on pump - waiting for drain-down"));
+            } else {
+              manual_main_pump_request = true;
+              turn_main_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
+            }
           }
         }
       }
@@ -497,8 +504,15 @@ void process_pressed_keys_callback(void)
         if (timer_switch_on) { // While timer switch is closed, run main pump
           some_key_pressed = true;
           if (main_pump_is_on() == false) {
-            turn_main_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
-          } 
+            // Check if we're in drain-down period
+            if (diverter_valve_is_sending_water_to_roof() &&
+                !diverter_valve_request &&
+                (millis() - main_pump_on_off_time) < drain_down_time) {
+              Serial.println(F("# Timer switch: cannot turn on pump - waiting for drain-down"));
+            } else {
+              turn_main_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
+            }
+          }
           // We will turn on the boost pump when we see that the main pump has developed
           // pressure, to ensure that the main pump is working before we turn on the boost pump
 
