@@ -79,7 +79,6 @@ const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long periodic_filter_duration = 2UL * 3600UL * 1000UL;  // Run for 2 hours during daily cleaning
 const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
-const unsigned long periodic_boost_interval = 24UL * 3600UL * 1000UL;  // Run boost pump once per day
 const unsigned long periodic_boost_duration = 45UL * 60UL * 1000UL;    // Run for 45 minutes
 
 #define SENSOR_ERROR (-999.0)  // Sentinel value for failed temperature sensors
@@ -396,7 +395,7 @@ void process_pressed_keys_callback(void)
 
       case m_pump:
         manual_main_pump_request = true;
-        turn_main_pump_on(F("# main pump="));
+        turn_main_pump_on(F("diag mode: main pump="));
         Serial.println(main_pump_is_on());
         break;
 
@@ -454,13 +453,15 @@ void process_pressed_keys_callback(void)
 
       case m_pump:
         manual_main_pump_request = false;
-        turn_main_pump_off(F("# main pump="));
-        Serial.println(main_pump_is_on());
+        if (boost_pump_is_on()) {
+          turn_boost_pump_off(F("main pump turning off"));
+        }
+
+        turn_main_pump_off(F("diag"));
         break;
 
       case m_boost:
-        turn_boost_pump_off(F("# boost pump="));
-        Serial.println(boost_pump_is_on());
+        turn_boost_pump_off(F("diag"));
         break;
         
       case m_24vac:
@@ -499,7 +500,11 @@ void process_pressed_keys_callback(void)
         if (red_button_pressed) { // If button is depressed, toggle the pool pump relay
           if (main_pump_is_on()) {
             manual_main_pump_request = false;
-            turn_main_pump_off(F("# Pool pump is on, turning it off due to press of red button\n"));
+            if (boost_pump_is_on()) {
+              turn_boost_pump_off(F("main pump turning off"));
+            }
+
+            turn_main_pump_off(F("red button"));
           } else {
             // Check if we're in drain-down period (valve in roof mode, waiting for pool piping to drain)
             if (diverter_valve_is_sending_water_to_roof() &&
@@ -508,7 +513,7 @@ void process_pressed_keys_callback(void)
               Serial.println(F("# Red button: cannot turn on pump - waiting for drain-down"));
             } else {
               manual_main_pump_request = true;
-              turn_main_pump_on(F("# Pool pump is off, turning it on due to press of red button\n"));
+              turn_main_pump_on(F("press of red button"));
             }
           }
         }
@@ -530,7 +535,7 @@ void process_pressed_keys_callback(void)
                 (millis() - main_pump_on_off_time) < drain_down_time) {
               Serial.println(F("# Timer switch: cannot turn on pump - waiting for drain-down"));
             } else {
-              turn_main_pump_on(F("# Main pump is off, turn it on due to timer switch request\n"));
+              turn_main_pump_on(F("timer switch"));
             }
           }
           // We will turn on the boost pump when we see that the main pump has developed
@@ -549,7 +554,7 @@ void process_pressed_keys_callback(void)
         if (diverter_valve_request) {
           turn_diverter_valve_transformer_on();
           set_diverter_valve_to_send_water_to_roof();
-          turn_main_pump_on(F("# diverter request present\n"));
+          turn_main_pump_on(F("diverter request"));
 
         } else {
           // Logic in monitor_diverter_valve() will turn the main pump if it should be off and
@@ -589,9 +594,6 @@ void turn_main_pump_on(const __FlashStringHelper *message)
 
 void turn_main_pump_off(const __FlashStringHelper *message)
 {
-  if (message != nullptr) {
-    Serial.print(message);
-  }
   if (boost_pump_is_on()) {
     turn_boost_pump_off(F("# alert turn_main_pump_off() found boost pump on"));
   }
@@ -601,6 +603,10 @@ void turn_main_pump_off(const __FlashStringHelper *message)
     }
     main_pump_on_off_time = millis();
     Serial.print(F("# turn_main_pump_off(): "));
+    if (message != nullptr) {
+      Serial.print(message);
+    }
+    Serial.print(F(" off-time: "));
     Serial.println(main_pump_on_off_time);
   }
 }
@@ -633,15 +639,16 @@ void turn_boost_pump_on(const __FlashStringHelper *message)
 
 void turn_boost_pump_off(const __FlashStringHelper *message)
 {
-  if (message != (void *)0) {
-    Serial.print(message);
-  }
   if (boost_pump_is_on()) {
     if (quad_lv_relay != (void *)0) {
       quad_lv_relay->turnRelayOff(LV_RELAY_BOOST_PUMP_12V);
     }
     boost_pump_on_off_time = millis();
     Serial.print(F("# turn_boost_pump_off(): "));
+    if (message != (void *)0) {
+      Serial.print(message);
+    }
+    Serial.print(F(" time:"));
     Serial.println(boost_pump_on_off_time);
   }
 }
@@ -740,43 +747,57 @@ void monitor_main_pump_callback(void)
       unsigned long pump_time_limit = periodic_filter_request ? periodic_filter_duration : max_main_pump_on_time;
 
       if ((millis() - main_pump_on_off_time) > pump_time_limit) {
+        if (boost_pump_is_on()) {
+          turn_boost_pump_off(F("main pump turning off"));
+        }
         // Turn off the pump
         if (periodic_filter_request) {
-          turn_main_pump_off(F("# turning off pool pump after 2-hour periodic filtering\n"));
+          turn_main_pump_off(F("end of periodic filtering"));
           periodic_filter_request = false;
         } else {
-          turn_main_pump_off(F("# turning off pool pump due to time limit\n"));
+          turn_main_pump_off(F("pump run-time limit"));
         }
         manual_main_pump_request = false; // Cancel request
       } else {
         float max_psi = diverter_valve_is_sending_water_to_roof() ? max_pressure_sending_water_to_roof : max_pressure_sending_water_to_pool;
 
         if (pressure_psi > max_psi) {
-          turn_main_pump_off(F("# alert turning off pump due to overpressure: PSI="));
-          Serial.println(pressure_psi);
+          if (boost_pump_is_on()) {
+            turn_boost_pump_off(F("main pump turning off"));
+          }
+
+          turn_main_pump_off(F("overpressure"));
           manual_main_pump_request = false;
         } else if (!diverter_valve_request) {
           // If we are not being asked to send water to the roof, the pool-cleaner timer switch
           // is not requesting pool cleaning, and this is not the time to filter the pool water
           // by running the pump, then turn it off.
-          if (!timer_switch_on && !manual_main_pump_request) {
-            turn_main_pump_off(F("# turning off pump due to lack of timer switch and manual (red button) requests\n"));
+          if (!timer_switch_on && !manual_main_pump_request && !periodic_boost_request) {
+            if (boost_pump_is_on()) {
+              turn_boost_pump_off(F("main pump turning off"));
+            }
+
+            turn_main_pump_off(F("lack of timer switch and manual (red button) requests"));
           } else {
             if (diverter_valve_is_sending_water_to_roof() &&
             (millis() - last_diverter_valve_request_change) < 60 * 1000UL) {
               // Although we have other reasons to run the pump, we need to turn it off to let the panels
               // drain of pool water.  We will later turn it back on.  We distinguish this case by seeing
               // if the the diverter request just went away within the last minute.
-              turn_main_pump_off(F("# turning off pump to let panels drain\n"));
+              if (boost_pump_is_on()) {
+                turn_boost_pump_off(F("main pump turning off"));
+              }
+
+              turn_main_pump_off(F("let panels drain"));
               manual_main_pump_request = false;
             }
           }
         }
       }
-    } else { // Pump is not on, see if it should be, but only after a twenty minute delay for any draining needed
+    } else { // Pump is not on, see if it should be, but only after a several minute delay for any draining needed
       if ((millis() - main_pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
-          turn_main_pump_on(F("# turning pump back on for timer switch\n"));
+          turn_main_pump_on(F("timer switch"));
         } else {
           // Check if it's noon and we haven't run periodic filtering today
           int current_hour = hour(arduino_time);
@@ -784,33 +805,21 @@ void monitor_main_pump_callback(void)
           if (current_hour == 12 && current_day != last_periodic_filter_day) {
             periodic_filter_request = true;
             last_periodic_filter_day = current_day;
-            turn_main_pump_on(F("# periodic filtering at noon\n"));
+            turn_main_pump_on(F("filtering at noon"));
+            periodic_boost_request = true;
             manual_main_pump_request = true;
           }
         }
       }
     }
   }
-  
   check_free_memory(F("monitor_pump exit"));
 }
 
 void monitor_boost_pump_callback(void)
 {
   if (operating_mode == m_normal) {
-    // Check if it's time for periodic boost pump operation (once per day)
-    if (!boost_pump_is_on() &&
-        !timer_switch_on &&
-        (millis() - boost_pump_on_off_time) > periodic_boost_interval) {
-      periodic_boost_request = true;
-      Serial.println(F("# Periodic boost pump requested"));
-      // Ensure main pump is on before we can run boost pump
-      if (!main_pump_is_on()) {
-        turn_main_pump_on(F("# turning on main pump for periodic boost operation\n"));
-      }
-    }
-
-    // Turn on boost pump when conditions are met (timer switch OR periodic request)
+     // Turn on boost pump when conditions are met (timer switch OR periodic request)
     if (main_pump_is_on() && pressure_psi >= 5 && boost_pump_is_on() == false) {
       if (timer_switch_on) {
         turn_boost_pump_on(F("timer switch request"));
@@ -821,7 +830,7 @@ void monitor_boost_pump_callback(void)
     }
 
     if (boost_pump_is_on() && (main_pump_is_on() == false || pressure_psi < 5)) {
-      turn_boost_pump_off(F("# low pressure, turning boost pump off"));
+      turn_boost_pump_off(F("low pressure"));
       periodic_boost_request = false;
     }
   }
@@ -831,10 +840,10 @@ void monitor_boost_pump_callback(void)
   if (boost_pump_is_on() && (millis() - boost_pump_on_off_time) > boost_time_limit) {
     // Turn off the boost pump
     if (periodic_boost_request) {
-      turn_boost_pump_off(F("# turning off boost pump after periodic 45-minute run\n"));
+      turn_boost_pump_off(F("end of periodic 45-minute run"));
       periodic_boost_request = false;
     } else {
-      turn_boost_pump_off(F("# turning off boost pump due to time limit\n"));
+      turn_boost_pump_off(F("time limit"));
     }
   }
 }
