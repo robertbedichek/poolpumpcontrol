@@ -31,7 +31,7 @@ SSH_COMMAND = [
 ]
 
 # port = "/dev/tty.usbserial-211440"
-port = "/dev/tty.usbserial-212440"
+port = "/dev/tty.usbserial-11240"
 baud_rate = 115200
 
 ser = serial.Serial(port, baud_rate, timeout=1)
