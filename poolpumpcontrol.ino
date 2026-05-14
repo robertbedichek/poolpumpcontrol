@@ -124,10 +124,10 @@ Task monitor_serial_console(TASK_SECOND, TASK_FOREVER, &monitor_serial_console_c
 
 Task monitor_diverter_control(TASK_SECOND * 6, TASK_FOREVER, &monitor_diverter_valve_callback, &ts, true);
 
-float pool_temperature1_F = 0.0;
-float pool_temperature2_F = 0.0;
-float pool_temperature_F = 0.0; // Average of the two pool temperatures, or just one of them if the other is out of range
-float outside_temperature_F = 0.0;
+float pool_temperature1_F = SENSOR_ERROR;
+float pool_temperature2_F = SENSOR_ERROR;
+float pool_temperature_F = SENSOR_ERROR; // Average of the two pool temperatures, or just one of them if the other is out of range
+float outside_temperature_F = SENSOR_ERROR;
 float pressure_psi;
 
 const float max_pressure_sending_water_to_pool = 23.0;
@@ -137,8 +137,9 @@ Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs
 /*****************************************************************************************************/
 #define POOL_TEMPERATURE1_INPUT   (A0)     // 0-5VDC LM36 that is immersed in pool water, about 1' deep under diving board
 #define POOL_TEMPERATURE2_INPUT   (A1)     // A second LM36 in the same probe, for redundancy
-#define OUTSIDE_TEMPERATURE_INPUT (A2)     // An LM36 sensing ambient temperature near the pool equipment
-#define PRESSURE_INPUT            (A3)     // 0-5VDC pressure sensor on top of filter canister
+#define PRESSURE_INPUT            (A2)     // 0-5VDC pressure sensor on top of filter canister
+#define OUTSIDE_TEMPERATURE_INPUT (A3)     // An LM36 sensing ambient temperature near the pool equipment
+
 
 bool timer_switch_on;
 
@@ -237,7 +238,7 @@ int free_memory() {
 }
 
 // Flag a warning if there are fewer than this number of bytes of free memory.
-#define LOW_MEMORY_LIMIT (500)
+#define LOW_MEMORY_LIMIT (400)
 
 // This will be overwritten on the first call to "check_free_memory(F("..."));".  It
 // records the smallest number of bytes of free memory
@@ -935,6 +936,20 @@ void update_lcd_callback(void)
   check_free_memory(F("update_lcd.. exit"));
 }
 
+
+// --- Insertion sort (in-place, ascending) --------------------------------
+static void insertionSort(int arr[], int n) {
+    for (int i = 1; i < n; i++) {
+        int key = arr[i];
+        int j   = i - 1;
+        while (j >= 0 && arr[j] > key) {
+            arr[j + 1] = arr[j];
+            j--;
+        }
+        arr[j + 1] = key;
+    }
+}
+
 // This is called once per second.  It samples the time, temperature, and pressure.  It records these in globals read by other
 // tasks.
 
@@ -943,24 +958,69 @@ void read_time_and_sensor_inputs_callback(void)
   check_free_memory(F("read_time_and.."));
   arduino_time = now();
   
-  unsigned long raw_pool_temperature1_volts = 0;
-  unsigned long raw_pool_temperature2_volts = 0;
-  unsigned long raw_outside_temperature_volts = 0;
-  unsigned long raw_pressure_volts = 0;
+  #define NUM_SAMPLES (16)
+#define TRIM_COUNT  (4)       // discard this many from each end
+#define MAX_RETRIES (20)
+  static int warnings = 0;
+
+  int pool1[NUM_SAMPLES];  // Array of
+  int pool2[NUM_SAMPLES];
+  int outside[NUM_SAMPLES];
+  int pressure[NUM_SAMPLES];
+  //int substitute_pool = 140;
+//  int substitute_outside = 150;
+
+  for (int i = 0; i < NUM_SAMPLES; i++) {
+    pool1[i] = analogRead(POOL_TEMPERATURE1_INPUT);
+   // if (pool1[i] < 102 || pool1[i] > 185) {
+//      pool1[i] = substitute_pool;
+//    } else {
+//      substitute_pool = pool1[i];
+//    }
+
+    pool2[i] = analogRead(POOL_TEMPERATURE2_INPUT);
+  //  if (pool2[i] < 102 || pool2[i] > 185) {
+//      pool2[i] = substitute_pool;
+//    }
+
+    outside[i] = analogRead(OUTSIDE_TEMPERATURE_INPUT);
+  //  if (outside[i] < 90 || outside[i] > 200) {
+//      outside[i] = substitute_outside;
+//    } else {
+//      substitute_outside = outside[i];
+//    }
+
+    pressure[i] = analogRead(PRESSURE_INPUT);
+    delay(1); // Ensure that we take samples over more than one 60 Hz interval
+    // If we have an out-of-range sample, sample again.
+  }
+    
+  insertionSort(pool1, NUM_SAMPLES);
+  insertionSort(pool2, NUM_SAMPLES);
+  insertionSort(outside, NUM_SAMPLES);
+  insertionSort(pressure, NUM_SAMPLES);
+
+  // Sum the middle samples, skipping TRIM_COUNT on each end
+
+  int raw_pool_temperature1_volts = 0;
+  int raw_pool_temperature2_volts = 0;
+  int raw_outside_temperature_volts = 0;
+  int raw_pressure_volts = 0;
   unsigned adc_samples = 20;
 
-  // Reduce sample noise by taking a number of samples and using the arithmetic mean
-  for (int i = 0 ; i < adc_samples ; i++) {
-    raw_pool_temperature1_volts += analogRead(POOL_TEMPERATURE1_INPUT);
-    raw_pool_temperature2_volts += analogRead(POOL_TEMPERATURE2_INPUT);
-    raw_outside_temperature_volts += analogRead(OUTSIDE_TEMPERATURE_INPUT);
-    raw_pressure_volts += analogRead(PRESSURE_INPUT);
+
+  const int keepCount = NUM_SAMPLES - 2 * TRIM_COUNT;
+  for (int i = TRIM_COUNT; i < NUM_SAMPLES - TRIM_COUNT; i++) {
+    raw_pool_temperature1_volts += pool1[i];
+    raw_pool_temperature2_volts += pool2[i];
+    raw_outside_temperature_volts += outside[i];
+    raw_pressure_volts += pressure[i];
   }
-  
-  raw_pool_temperature1_volts /= adc_samples;  
-  raw_pool_temperature2_volts /= adc_samples;
-  raw_outside_temperature_volts /= adc_samples;
-  raw_pressure_volts /= adc_samples; 
+
+  raw_pool_temperature1_volts /= keepCount;
+  raw_pool_temperature2_volts /= keepCount;
+  raw_outside_temperature_volts /= keepCount;
+  raw_pressure_volts /= keepCount;
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
   float pool_temperature1_millivolts = (float)raw_pool_temperature1_volts * 5000.0 / 1023.0;
@@ -972,7 +1032,7 @@ void read_time_and_sensor_inputs_callback(void)
   float pool_temperature1_this_sample_F = pool_temperature1_C * 9.0 / 5.0 + 32.0;
 
   // EMA filter
-  const float alpha = 0.08;
+  const float alpha = 0.5;
   if (pool_temperature1_F <= SENSOR_ERROR) {
     pool_temperature1_F = pool_temperature1_this_sample_F;
   }
@@ -1030,7 +1090,7 @@ void read_time_and_sensor_inputs_callback(void)
     outside_temperature_F = SENSOR_ERROR;
   }
   float pressure_volts = raw_pressure_volts * 5.0 / 1023.0;
-  pressure_volts -= 0.29;   // Pressure sensor reads 0.29 volts when pressure is zero
+  pressure_volts -= 0.274;   // Pressure sensor reads 0.29 volts when pressure is zero
   if (pressure_volts < 0.0) {
     pressure_volts = 0.0;
   }
