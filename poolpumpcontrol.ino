@@ -66,8 +66,9 @@ bool toggle_key_pressed = false;
 bool date_set;
 bool time_set;
 void read_time_and_sensor_inputs_callback(void);
-// void monitor_lcd_backlight_callback(void);
-void print_status_to_serial_callback(void);
+
+bool force_telemetry;
+void emit_telemetry_callback(void);
 void poll_keys_callback(void);
 void update_lcd_callback(void);
 
@@ -216,15 +217,13 @@ Task process_pressed_keys(100, TASK_FOREVER, &process_pressed_keys_callback, &ts
 volatile unsigned long lastInterruptTime = 0;
 const int debounce_delay = 100;  // 150ms debounce time
 
-Task print_status_to_serial(TASK_SECOND, TASK_FOREVER, &print_status_to_serial_callback, &ts, true);
+Task emit_telemetry(TASK_SECOND, TASK_FOREVER, &emit_telemetry_callback, &ts, true);
 /*****************************************************************************************************/
 // Update slightly faster than once per second so that the LCD time advances regularly in a way that 
 // looks normal to humans (i.e., make sure that the seconds display counts up once per second).
 // We depend on this being called about once per second and being enabled at boot time.
-// Task monitor_lcd_backlight(TASK_SECOND, TASK_FOREVER, &monitor_lcd_backlight_callback, &ts, true);
 Task update_lcd(900, TASK_FOREVER, &update_lcd_callback, &ts, true);
 /*****************************************************************************************************/
-
 
 // This is a diagnostic function that returns the amount of free RAM, which is the RAM between the top
 // of the heap and the bottom of the stack.
@@ -278,8 +277,8 @@ void format_temperature(float temp_F, char *buf, size_t buf_size) {
     strncpy(buf, "  -", buf_size);
     buf[buf_size - 1] = '\0';
   } else {
-    // Format as "XXX" (3 digits, right-aligned)
-    snprintf(buf, buf_size, "%3d", (int)temp_F);
+    // Format as "XX.X"
+    dtostrf(temp_F, 4, 1, buf);
   }
 }
 
@@ -290,7 +289,7 @@ void format_temperature(float temp_F, char *buf, size_t buf_size) {
 const char *operating_mode_to_string(operating_mode_t operating_mode) 
 {
   // m_pump, m_diverter
-  char *s[] = {"Normal", "Safe  ", "Main P", "Boost ", "24 VAC", "Divert"};
+  const char *s[] = {"Normal", "Safe  ", "Main P", "Boost ", "24 VAC", "Divert"};
   if (operating_mode < m_last) {
     return s[operating_mode];
   }
@@ -308,25 +307,6 @@ void monitor_diag_mode_callback(void)
     monitor_diag_mode.disable();
   }
 }
-
-/*
-   Called every second the backlight is on and turns off the backlight, and disables itself, when the backlight timer
-   has counted down to zero.
-*/
-// void monitor_lcd_backlight_callback(void) 
-// {
-//   if (backlight_timer > 0 && (operating_mode == m_normal || operating_mode == m_safe)) {
-//     backlight_timer--;
-//     if (backlight_timer == 0) {
-//       delay(50);
-//       lcd->clear(); // Changing the backlight scrambles the display, so clear it and let it be refreshed in update_lcd
-//       delay(50);
-//       lcd->setBacklight(0, 0, 0);
-//       delay(50);
-//       monitor_lcd_backlight.disable();
-//     }
-//   }
-// }
 
 // This is called by a task if we have compiled with the option to poll keys.  If we have 
 // compiled to use interrupts, this is the interrupt routine.
@@ -961,8 +941,7 @@ void read_time_and_sensor_inputs_callback(void)
   #define NUM_SAMPLES (16)
 #define TRIM_COUNT  (4)       // discard this many from each end
 #define MAX_RETRIES (20)
-  static int warnings = 0;
-
+ 
   int pool1[NUM_SAMPLES];  // Array of
   int pool2[NUM_SAMPLES];
   int outside[NUM_SAMPLES];
@@ -1002,13 +981,11 @@ void read_time_and_sensor_inputs_callback(void)
 
   // Sum the middle samples, skipping TRIM_COUNT on each end
 
-  int raw_pool_temperature1_volts = 0;
-  int raw_pool_temperature2_volts = 0;
-  int raw_outside_temperature_volts = 0;
-  int raw_pressure_volts = 0;
-  unsigned adc_samples = 20;
-
-
+  float raw_pool_temperature1_volts = 0;
+  float raw_pool_temperature2_volts = 0;
+  float raw_outside_temperature_volts = 0;
+  float raw_pressure_volts = 0;
+  
   const int keepCount = NUM_SAMPLES - 2 * TRIM_COUNT;
   for (int i = TRIM_COUNT; i < NUM_SAMPLES - TRIM_COUNT; i++) {
     raw_pool_temperature1_volts += pool1[i];
@@ -1023,7 +1000,7 @@ void read_time_and_sensor_inputs_callback(void)
   raw_pressure_volts /= keepCount;
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
-  float pool_temperature1_millivolts = (float)raw_pool_temperature1_volts * 5000.0 / 1023.0;
+  float pool_temperature1_millivolts = raw_pool_temperature1_volts * 5000.0 / 1023.0;
 
   // See the LM36 data shee to understand the conversion of millivolts to degrees C
   float pool_temperature1_C = (pool_temperature1_millivolts - 500.0) / 10.0;
@@ -1033,7 +1010,7 @@ void read_time_and_sensor_inputs_callback(void)
 
   // EMA filter
   const float alpha = 0.5;
-  if (pool_temperature1_F <= SENSOR_ERROR) {
+  if (pool_temperature1_F == SENSOR_ERROR) {
     pool_temperature1_F = pool_temperature1_this_sample_F;
   }
   pool_temperature1_F = alpha * pool_temperature1_this_sample_F + (1.0 - alpha) * pool_temperature1_F;
@@ -1044,7 +1021,7 @@ void read_time_and_sensor_inputs_callback(void)
   }
 
   // See Arduino documents to understand the conversion of raw ADC values to a voltage
-  float pool_temperature2_millivolts = (float)raw_pool_temperature2_volts * 5000.0 / 1023.0;
+  float pool_temperature2_millivolts = raw_pool_temperature2_volts * 5000.0 / 1023.0;
 
   // See the LM36 data shee to understand the conversion of millivolts to degrees C
   float pool_temperature2_C = (pool_temperature2_millivolts - 500.0) / 10.0;
@@ -1053,7 +1030,7 @@ void read_time_and_sensor_inputs_callback(void)
   float pool_temperature2_this_sample_F = pool_temperature2_C * 9.0 / 5.0 + 32.0;
 
   // EMA filter
-  if (pool_temperature2_F <= SENSOR_ERROR) {
+  if (pool_temperature2_F == SENSOR_ERROR) {
     pool_temperature2_F = pool_temperature2_this_sample_F;
   }
   pool_temperature2_F = alpha * pool_temperature2_this_sample_F + (1.0 - alpha) * pool_temperature2_F;
@@ -1075,12 +1052,12 @@ void read_time_and_sensor_inputs_callback(void)
     pool_temperature_F = (pool_temperature1_F + pool_temperature2_F) / 2.0;
   }
 
-  float outside_temperature_millivolts = (float)raw_outside_temperature_volts * 5000.0 / 1023.0;
+  float outside_temperature_millivolts = raw_outside_temperature_volts * 5000.0 / 1023.0;
   float outside_temperature_C = (outside_temperature_millivolts - 500.0) / 10.0;
 
   // Convert to degrees F
   float outside_temperature_this_sample_F = outside_temperature_C * 9.0 / 5.0 + 32.0;
-  if (outside_temperature_F <= SENSOR_ERROR) {
+  if (outside_temperature_F == SENSOR_ERROR) {
     outside_temperature_F = outside_temperature_this_sample_F;
   }
   outside_temperature_F = alpha * outside_temperature_this_sample_F + (1.0 - alpha) * outside_temperature_F;
@@ -1090,7 +1067,7 @@ void read_time_and_sensor_inputs_callback(void)
     outside_temperature_F = SENSOR_ERROR;
   }
   float pressure_volts = raw_pressure_volts * 5.0 / 1023.0;
-  pressure_volts -= 0.274;   // Pressure sensor reads 0.29 volts when pressure is zero
+  pressure_volts -= 0.29;   // Pressure sensor reads 0.29 volts when pressure is zero
   if (pressure_volts < 0.0) {
     pressure_volts = 0.0;
   }
@@ -1101,9 +1078,10 @@ void read_time_and_sensor_inputs_callback(void)
 // Called periodically.  Sends relevant telemetry back over the USB serial connection to a host
 // computer (e.g., M3 Mac Mini) that can aborb these messages and generate plots
 
-void print_status_to_serial_callback(void) 
+void emit_telemetry_callback(void) 
 {
   check_free_memory(F("print_status_to.."));
+  static bool last_force_telemetry;
   static float last_pool_temperature1_F;
   static float last_pool_temperature2_F;
   static float last_pressure_psi; 
@@ -1118,13 +1096,15 @@ void print_status_to_serial_callback(void)
   bool to_roof = diverter_valve_is_sending_water_to_roof();
   unsigned records_to_skip = (operating_mode == m_normal) ? 600 : 60;
 
-  if (abs(pool_temperature1_F - last_pool_temperature1_F) > 1.5 ||
+  if (force_telemetry != last_force_telemetry ||
+      abs(pool_temperature1_F - last_pool_temperature1_F) > 1.5 ||
       abs(pool_temperature2_F - last_pool_temperature2_F) > 1.5 ||
       abs(pressure_psi - last_pressure_psi) > 0.5 ||
       pump != last_pump ||
       diverter_valve_request != last_diverter_valve_request ||
       to_roof != last_to_roof ||
       skipped_record_counter++ > records_to_skip) {
+   last_force_telemetry = force_telemetry;
    last_pool_temperature1_F = pool_temperature1_F;
    last_pool_temperature2_F = pool_temperature2_F;
    last_pressure_psi = pressure_psi;
@@ -1135,7 +1115,7 @@ void print_status_to_serial_callback(void)
    skipped_record_counter = 0;
       
     if (line_counter == 0) {
-        Serial.println(F("# Date     Time      Pl1 Pl2 Out PSI  Pmp Bst Req Roof Mode"));
+        Serial.println(F("# Date     Time      Pl1  Pl2  Out   PSI   Pmp Bst Req Roof Mode"));
         line_counter = 20;
       } else {
         line_counter--;
@@ -1208,6 +1188,7 @@ void monitor_serial_console_callback(void)
     if (received_char == '\n') {
       Serial.print(F("# Received: "));
       Serial.println(command_buf);
+      force_telemetry = !force_telemetry;
 
       switch (command_buf[0]) {   
         case 'd': // Set date command, "d year-month-day", e.g., "t 2025-05-23" to set the date
