@@ -83,25 +83,19 @@ def is_valid_data_line(line):
       else:
 #        print("Target time is within acceptable range.")
 
-        # Try to parse all 8 remaining fields as floats
-        for val in parts[2:]:
+        # Try to parse all next 9 fields as floats
+        for val in parts[2:10]:
             float(val)
 
         return True
 
     except ValueError:
-      print("Invalid date/time received from Arduino.")
+      print("Invalid date/time received from Arduino: " + line)
       return False
 
     except Exception:
       print("Unable to parse date/time field or remaining fields: " + line)
       return False
-
-# Read and validate lines
-# with open("solar_data.txt") as f:
-#     for i, line in enumerate(f, start=1):
-#         if not is_valid_data_line(line):
-#             print(f"Malformed line {i}: {line.strip()}")
 
 print(f"Connected to {port}. Reading data.. \n")
 

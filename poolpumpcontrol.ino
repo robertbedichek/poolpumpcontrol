@@ -14,11 +14,18 @@
 #include <TimeLib.h>  // for update/display of time
 #include <avr/wdt.h>
 
+// Reset cause captured at boot from MCUSR. One of: 'P' (power-on/external),
+// 'B' (brown-out), 'W' (watchdog), 'X' (unknown).
+char reset_cause = 'P';
+
 //   All the operational code uses this time structure.  This is initialized at start time from the battery-backed up DS1307 RTC.
 time_t arduino_time;
 const bool verbose_I2C = false;
 
 #include <Wire.h> // For communication with Sparkfun quad relay and LCD display
+
+#include <EEPROM.h>
+#define EEPROM_WDT_COUNT_ADDR 0
 
 /*
  * Sparkfun quad low voltage relays.  Relays 1 and 2 control the power to inlet valve motors.
@@ -67,7 +74,7 @@ bool date_set;
 bool time_set;
 void read_time_and_sensor_inputs_callback(void);
 
-bool force_telemetry;
+int force_telemetry;               // Incrementing this forces a line of telemetry to be emitted
 void emit_telemetry_callback(void);
 void poll_keys_callback(void);
 void update_lcd_callback(void);
@@ -561,7 +568,8 @@ void process_pressed_keys_callback(void)
 void turn_main_pump_on(const __FlashStringHelper *message)
 {
   if (message != nullptr) {
-    Serial.print(message);
+    Serial.print(F("# "));
+    Serial.println(message);
   }
   if (main_pump_is_on() == false) {
     if (quad_lv_relay != nullptr) {
@@ -1081,7 +1089,7 @@ void read_time_and_sensor_inputs_callback(void)
 void emit_telemetry_callback(void) 
 {
   check_free_memory(F("print_status_to.."));
-  static bool last_force_telemetry;
+  static int last_force_telemetry;
   static float last_pool_temperature1_F;
   static float last_pool_temperature2_F;
   static float last_pressure_psi; 
@@ -1115,7 +1123,7 @@ void emit_telemetry_callback(void)
    skipped_record_counter = 0;
       
     if (line_counter == 0) {
-        Serial.println(F("# Date     Time      Pl1  Pl2  Out   PSI   Pmp Bst Req Roof Mode"));
+        Serial.println(F("# Date     Time      Pl1  Pl2  Out   PSI   Pmp Bst Req Roof Mode Boot"));
         line_counter = 20;
       } else {
         line_counter--;
@@ -1144,13 +1152,17 @@ void emit_telemetry_callback(void)
     char ot_str[8];
     format_temperature(outside_temperature_F, ot_str, sizeof(ot_str));
     
-    snprintf(cbuf, sizeof(cbuf), " %s %s %s %s %3u %3u %3u %3u  %3u",
-             pt1_str, pt2_str, ot_str, pressure_psi_str,
+    snprintf(cbuf, sizeof(cbuf), " %s %s %s %s",
+             pt1_str, pt2_str, ot_str, pressure_psi_str);
+    Serial.print(cbuf);
+
+    snprintf(cbuf, sizeof(cbuf), " %3u %3u %3u %3u  %3u    %c",
              pump,
              boost,
              diverter_valve_request,
              to_roof,
-             (unsigned)operating_mode);
+             (unsigned)operating_mode,
+             reset_cause);
     Serial.println(cbuf);
   }
   check_free_memory(F("print_status_to.. exit"));
@@ -1188,7 +1200,7 @@ void monitor_serial_console_callback(void)
     if (received_char == '\n') {
       Serial.print(F("# Received: "));
       Serial.println(command_buf);
-      force_telemetry = !force_telemetry;
+      force_telemetry++;
 
       switch (command_buf[0]) {   
         case 'd': // Set date command, "d year-month-day", e.g., "t 2025-05-23" to set the date
@@ -1378,26 +1390,41 @@ void setup_arduino_time(void)
 */
 void setup(void)
 {
+  
+  uint8_t mcusr = MCUSR;
+  MCUSR = 0;
+
+  Serial.begin(SERIAL_BAUD);
+  UCSR0A = UCSR0A | (1 << TXC0);
+
+  if (mcusr & (1 << WDRF)) {
+    reset_cause = 'W';
+    Serial.println(F("# alert Reset cause: Watchdog"));
+    uint16_t wdt_count;
+    EEPROM.get(EEPROM_WDT_COUNT_ADDR, wdt_count);
+    wdt_count++;
+    EEPROM.put(EEPROM_WDT_COUNT_ADDR, wdt_count);
+    Serial.print(F("# alert Reset cause: Watchdog, total count="));
+    Serial.println(wdt_count);
+  } else if (mcusr & (1 << BORF)) {
+    reset_cause = 'B';
+    Serial.println(F("# alert Reset cause: Brown-out"));
+  } else if (mcusr & (1 << EXTRF)) {
+    reset_cause = 'X';  // External reset (reset button or USB connection)
+    Serial.println(F("# alert Reset cause: External"));
+  } else if (mcusr & (1 << PORF)) {
+    reset_cause = 'P';
+    Serial.println(F("# alert Reset cause: Power-on"));
+  }
+
   wdt_disable();
   setup_arduino_pins();
   analogReference(DEFAULT);
 
   Wire.begin();
+  Wire.setWireTimeout(25000, true);  // 25ms timeout, reset on timeout
 //  Wire.setClock(400000);  Not sure if this matters.
 
-  uint8_t mcusr = MCUSR;
-  MCUSR = 0;
- 
-  Serial.begin(SERIAL_BAUD);
-  UCSR0A = UCSR0A | (1 << TXC0); //Clear Transmit Complete Flag
-  
-  if (mcusr & (1 << BORF)) {
-    Serial.println("Reset cause: Brown-out");
-  }
-  if (mcusr & (1 << WDRF)) {
-    Serial.println("Reset cause: Watchdog");
-  }
-  
   if (!date_set && !time_set) {
     setup_arduino_time();
   }
