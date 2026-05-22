@@ -1015,6 +1015,7 @@ void read_time_and_sensor_inputs_callback(void)
 
   // Convert Centigrade to Fahrenheit
   float pool_temperature1_this_sample_F = pool_temperature1_C * 9.0 / 5.0 + 32.0;
+  pool_temperature1_this_sample_F -= 0.8; // Emperically derived
 
   // EMA filter
   const float alpha = 0.5;
@@ -1036,6 +1037,7 @@ void read_time_and_sensor_inputs_callback(void)
 
   // Convert Centigrade to Fahrenheit
   float pool_temperature2_this_sample_F = pool_temperature2_C * 9.0 / 5.0 + 32.0;
+  pool_temperature2_this_sample_F += 0.8; // Emperically derived
 
   // EMA filter
   if (pool_temperature2_F == SENSOR_ERROR) {
