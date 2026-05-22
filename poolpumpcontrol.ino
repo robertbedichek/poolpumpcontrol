@@ -1079,7 +1079,7 @@ void read_time_and_sensor_inputs_callback(void)
   if (pressure_volts < 0.0) {
     pressure_volts = 0.0;
   }
-  pressure_psi = pressure_volts * 4.905; // Empircally derived calibration value
+  pressure_psi = pressure_volts * 3.2459; // Empircally derived calibration value
   check_free_memory(F("read_time_and.. exit"));
 }
 
