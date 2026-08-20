@@ -85,14 +85,12 @@ void monitor_boost_pump_callback(void);
 const unsigned long drain_down_time = 5 * 60 * 1000UL; // 5 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long periodic_filter_duration = 2UL * 3600UL * 1000UL;  // Run for 2 hours during daily cleaning
-const unsigned long max_main_pump_on_time = 3UL * 3600UL * 1000UL;
+const unsigned long max_main_pump_on_time = 10UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
 const unsigned long periodic_boost_duration = 45UL * 60UL * 1000UL;    // Run for 45 minutes
 
 #define SENSOR_ERROR (-999.0)  // Sentinel value for failed temperature sensors
 
-// Last value read from input pin that is driven from solarthermal controller (asking for pool controller to send water to panels)
-bool diverter_valve_request; 
 unsigned long last_diverter_valve_request_change;  // Value of millis() the last time the input from the solarthermal controller changed.
 
 void monitor_diverter_valve_callback(void);
@@ -348,6 +346,10 @@ void poll_keys_callback(void)
 }
 
 
+bool diverter_valve_request()
+{
+  return digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
+}
 
 // The interrupt routine above will set global variables indicating which keys have been pressed.
 // In this function, we look at those global variables and take action required by the key presses
@@ -496,7 +498,7 @@ void process_pressed_keys_callback(void)
           } else {
             // Check if we're in drain-down period (valve in roof mode, waiting for pool piping to drain)
             if (diverter_valve_is_sending_water_to_roof() &&
-                !diverter_valve_request &&
+                !diverter_valve_request() &&
                 (millis() - main_pump_on_off_time) < drain_down_time) {
               Serial.println(F("# Red button: cannot turn on pump - waiting for drain-down"));
             } else {
@@ -519,7 +521,7 @@ void process_pressed_keys_callback(void)
           if (main_pump_is_on() == false) {
             // Check if we're in drain-down period
             if (diverter_valve_is_sending_water_to_roof() &&
-                !diverter_valve_request &&
+                !diverter_valve_request() &&
                 (millis() - main_pump_on_off_time) < drain_down_time) {
               Serial.println(F("# Timer switch: cannot turn on pump - waiting for drain-down"));
             } else {
@@ -534,15 +536,22 @@ void process_pressed_keys_callback(void)
       last_timer_switch_on = timer_switch_on;
       timer_switch_on_time = millis();
     }
-    diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
-    if (diverter_valve_request != last_diverter_valve_request) {
-      last_diverter_valve_request = diverter_valve_request;
+    
+    if (diverter_valve_request() != last_diverter_valve_request) {
+      last_diverter_valve_request = diverter_valve_request();
       if ((millis() - last_diverter_valve_request_change) > debounce_delay) {
         some_key_pressed = true;
-        if (diverter_valve_request) {
+        if (diverter_valve_request()) {
           turn_diverter_valve_transformer_on();
           set_diverter_valve_to_send_water_to_roof();
           turn_main_pump_on(F("diverter request"));
+
+          // We must ensure that if the main pump were already on due to the daily filter program, that
+          // we cancel the flag that remembers this.  Otherwise, we will turn off the main pump at the end
+          // of the periodic filter time even though we want the main pump to stay on to keep heating
+          // the water.
+          periodic_filter_request = false; 
+            
 
         } else {
           // Logic in monitor_diverter_valve() will turn the main pump if it should be off and
@@ -784,7 +793,7 @@ void monitor_main_pump_callback(void)
         }
       }
     } else { // Pump is not on, see if it should be, but only after a several minute delay for any draining needed
-      if ((millis() - main_pump_on_off_time) > drain_down_time) {
+      if (!diverter_valve_request() && (millis() - main_pump_on_off_time) > drain_down_time) {
         if (timer_switch_on) {
           turn_main_pump_on(F("timer switch"));
         } else {
@@ -1111,7 +1120,7 @@ void emit_telemetry_callback(void)
       abs(pool_temperature2_F - last_pool_temperature2_F) > 1.5 ||
       abs(pressure_psi - last_pressure_psi) > 0.5 ||
       pump != last_pump ||
-      diverter_valve_request != last_diverter_valve_request ||
+      diverter_valve_request() != last_diverter_valve_request ||
       to_roof != last_to_roof ||
       skipped_record_counter++ > records_to_skip) {
    last_force_telemetry = force_telemetry;
@@ -1119,7 +1128,7 @@ void emit_telemetry_callback(void)
    last_pool_temperature2_F = pool_temperature2_F;
    last_pressure_psi = pressure_psi;
    last_pump = pump;
-   last_diverter_valve_request = diverter_valve_request;
+   last_diverter_valve_request = diverter_valve_request();
    last_to_roof = to_roof;
    
    skipped_record_counter = 0;
@@ -1161,7 +1170,7 @@ void emit_telemetry_callback(void)
     snprintf(cbuf, sizeof(cbuf), " %3u %3u %3u %3u  %3u    %c",
              pump,
              boost,
-             diverter_valve_request,
+             diverter_valve_request(),
              to_roof,
              (unsigned)operating_mode,
              reset_cause);
@@ -1445,8 +1454,7 @@ void setup(void)
   // If we start with the diverter valve direction relay in the position for sending water to roof, but there is no request for this
   // then ensure that the diverter valve is sending water back to the pool.
   
-  diverter_valve_request = digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
-  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request && !main_pump_is_on()) {
+  if (diverter_valve_is_sending_water_to_roof() &&  !diverter_valve_request() && !main_pump_is_on()) {
     Serial.println(F("# Turning diverter valve to pool on startup"));
     turn_diverter_valve_transformer_on();
     set_diverter_valve_to_return_water_to_pool();
