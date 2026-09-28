@@ -66,7 +66,7 @@ Scheduler ts;
 // Speed at which we run the serial connection (both via USB and RS-485)
 #define SERIAL_BAUD (115200)
 
-typedef enum {m_normal, m_safe, m_pump, m_boost, m_24vac, m_diverter, m_last} operating_mode_t;
+typedef enum {m_normal, m_pump, m_boost, m_24vac, m_diverter, m_last} operating_mode_t;
 
 bool toggle_key_pressed = false;
 
@@ -296,7 +296,7 @@ void format_temperature(float temp_F, char *buf, size_t buf_size) {
 const char *operating_mode_to_string(operating_mode_t operating_mode) 
 {
   // m_pump, m_diverter
-  const char *s[] = {"Normal", "Safe  ", "Main P", "Boost ", "24 VAC", "Divert"};
+  const char *s[] = {"Normal", "Main P", "Boost ", "24 VAC", "Divert"};
   if (operating_mode < m_last) {
     return s[operating_mode];
   }
@@ -380,11 +380,6 @@ void process_pressed_keys_callback(void)
         adjustTime(600);
         break;
 
-      case m_safe:
-        {
-        }
-        break;
-
       case m_pump:
         manual_main_pump_request = true;
         turn_main_pump_on(F("diag mode: main pump="));
@@ -423,24 +418,6 @@ void process_pressed_keys_callback(void)
     switch (operating_mode) {
       case m_normal:
         adjustTime(-600);
-        break;
-
-      case m_safe:
-        {
-          unsigned relay_history[4] = {0, 0, 0, 0};
-          for (int i = 0 ; i < 1000; i++){
-  
-            for (int relay = 0 ; relay < 4 ; relay++) {
-              if (quad_lv_relay != nullptr) {
-                relay_history[relay] += quad_lv_relay->getState(relay + 1);
-              }
-            }
-          }
-          for (int relay = 0 ; relay < 4 ; relay++) {
-            Serial.print(F("# relay count="));
-            Serial.println(relay_history[relay]);
-          }
-        }
         break;
 
       case m_pump:
@@ -566,7 +543,7 @@ void process_pressed_keys_callback(void)
     }
   }
   if (some_key_pressed) {
-    if (operating_mode == m_normal || operating_mode == m_safe) {
+    if (operating_mode == m_normal) {
       monitor_diag_mode.disable();
     } else {
       monitor_diag_mode.enable();
