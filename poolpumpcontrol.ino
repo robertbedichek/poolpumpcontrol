@@ -86,6 +86,7 @@ const unsigned long drain_down_time = 5 * 60 * 1000UL; // 5 minutes
 const unsigned long periodic_filter_interval = 24UL * 3600UL * 1000UL;
 const unsigned long periodic_filter_duration = 2UL * 3600UL * 1000UL;  // Run for 2 hours during daily cleaning
 const unsigned long max_main_pump_on_time = 10UL * 3600UL * 1000UL;
+const unsigned long max_daily_filtering_time = 3UL * 3600UL * 1000UL;
 const unsigned long max_boost_pump_on_time = 1UL * 3600UL * 1000UL;
 const unsigned long periodic_boost_duration = 45UL * 60UL * 1000UL;    // Run for 45 minutes
 
@@ -108,6 +109,7 @@ char cbuf[60];
 bool manual_main_pump_request;              // Set true by press of red buttor or '+' key in m_pump mode
 unsigned long main_pump_on_off_time;        // Assigned millis() when main pump is switched on
 unsigned long boost_pump_on_off_time;
+unsigned long main_pump_daily_run_time;     // Number of milliseconds that the main pump has been on today
 bool periodic_filter_request;               // Set true when periodic filtering operation is needed (daily at noon)
 bool periodic_boost_request;                // Set true when periodic boost pump operation is needed
 int last_periodic_filter_day;               // Day of month when last periodic filtering was started
@@ -599,6 +601,7 @@ void turn_main_pump_off(const __FlashStringHelper *message)
     if (quad_lv_relay != nullptr) {
       quad_lv_relay->turnRelayOff(LV_RELAY_MAIN_PUMP_12V);
     }
+    main_pump_daily_run_time += millis() - main_pump_on_off_time;
     main_pump_on_off_time = millis();
     Serial.print(F("# turn_main_pump_off(): "));
     if (message != nullptr) {
@@ -737,6 +740,12 @@ void set_diverter_valve_to_return_water_to_pool(void)
 
 void monitor_main_pump_callback(void)
 {
+  if (hour(arduino_time) == 0 && minute(arduino_time) == 0) {
+    if (main_pump_is_on()) {
+      turn_main_pump_off(F("midnight"));
+    }
+    main_pump_daily_run_time = 0;
+  }
   check_free_memory(F("monitor_pump"));
   if (operating_mode == m_normal) {
     if (main_pump_is_on()) { // Pump is on, see if any of the reasons for it to turn off have occured
@@ -955,7 +964,7 @@ void read_time_and_sensor_inputs_callback(void)
   check_free_memory(F("read_time_and.."));
   arduino_time = now();
   
-  #define NUM_SAMPLES (16)
+#define NUM_SAMPLES (16)
 #define TRIM_COUNT  (4)       // discard this many from each end
 #define MAX_RETRIES (20)
  
@@ -1134,7 +1143,7 @@ void emit_telemetry_callback(void)
    skipped_record_counter = 0;
       
     if (line_counter == 0) {
-        Serial.println(F("# Date     Time      Pl1  Pl2  Out   PSI   Pmp Bst Req Roof Mode Boot"));
+        Serial.println(F("# Date     Time      Pl1  Pl2  Out   PSI   Pmp Bst Req Roof Mode Runtime Boot"));
         line_counter = 20;
       } else {
         line_counter--;
@@ -1167,12 +1176,13 @@ void emit_telemetry_callback(void)
              pt1_str, pt2_str, ot_str, pressure_psi_str);
     Serial.print(cbuf);
 
-    snprintf(cbuf, sizeof(cbuf), " %3u %3u %3u %3u  %3u    %c",
+    snprintf(cbuf, sizeof(cbuf), " %3u %3u %3u %3u  %3u   %5u %c",
              pump,
              boost,
              diverter_valve_request(),
              to_roof,
              (unsigned)operating_mode,
+             main_pump_daily_run_time / 1000UL,
              reset_cause);
     Serial.println(cbuf);
   }
