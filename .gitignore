@@ -1,1 +1,3 @@
 poolpumpcontrol.wiki/
+build/
+poolcontrol_esp32/secrets.h

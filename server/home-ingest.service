@@ -1,0 +1,17 @@
+[Unit]
+Description=Telemetry from the home controllers (poolpumpcontrol, ...) into /var/www/html/home
+After=network.target
+
+[Service]
+User=www-data
+Group=www-data
+StateDirectory=home-ingest
+LoadCredential=tokens:/etc/home-ingest/tokens
+LoadCredential=pushover:/etc/home-ingest/pushover
+Environment=INGEST_TOKENS=%d/tokens INGEST_PUSHOVER=%d/pushover INGEST_PORT=5002
+ExecStart=/usr/bin/python3 /opt/home-ingest/home_ingest.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
