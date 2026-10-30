@@ -21,7 +21,7 @@ homecontrol, gobble scripts) is kept for reference only; it is no longer running
 |---|---|
 | Main board | Waveshare ESP32-S3-POE-ETH-8DI-8DO: ESP32-S3 (16 MB flash, 8 MB PSRAM), W5500 Ethernet with 802.3af PoE, 8 isolated inputs, 8 isolated Darlington outputs (500 mA sink, built-in flyback diodes), PCF85063 RTC with CR1220 backup cell, isolated RS485 |
 | Analog | Waveshare Modbus RTU Analog Input 8CH, address 1, 9600 8N1, on the RS485 port (A to A, B to B). Channel jumpers removed (voltage mode); the firmware sets data type 0 (0-5 V) on CH1-4 at start |
-| Network | PoE over the CAT5 run to the data closet PoE switch (the run used to carry USB over Ethernet). DHCP, 192.168.1.170, mDNS `poolcontrol.local` |
+| Network | PoE over the CAT5 run to the data closet PoE switch (the run used to carry USB over Ethernet). static **192.168.1.7** set in the firmware (`poolpumpcontrol` in /etc/hosts; solartracker and solarthermal will be .8 and .9), mDNS `poolpumpcontrol.local` |
 | Sensor power | The existing 5 V buck converter; sensor grounds tied to the analog module's power ground |
 
 ### Board pins (8DO variant)
@@ -90,7 +90,9 @@ poolctl + | - | button | telemetry | reboot | upload on|off
 poolctl flash [PORT]     # USB, first load only
 ```
 **All updates go over Ethernet** (`poolctl update`); there is no USB host at the pool. A new image must
-run a minute with the output expander answering before it is marked good, or the bootloader rolls back.
+run a minute with the output expander answering **and have served `/status` over the network** (poolctl
+update polls it) before it is marked good, or the bootloader rolls back. If you change the address, fetch
+`/status` at the new address within that minute (`POOLCTL_HOST` points poolctl at the old one).
 
 Build: arduino-cli, FQBN `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=cdc`,
 core esp32 3.3.x.

@@ -1533,13 +1533,19 @@ void setup_time(void)
 }
 
 /*****************************************************************************************************/
-// Network: Ethernet (W5500, powered over PoE), mDNS name poolcontrol.local, a small HTTP server for
-// poolctl, and an upload task that sends telemetry lines to bedichek.org.
+// Network: Ethernet (W5500, powered over PoE), static address 192.168.1.7 (poolpumpcontrol in
+// /etc/hosts; solartracker and solarthermal get .8 and .9), mDNS name poolpumpcontrol.local, a small
+// HTTP server for poolctl, and an upload task that sends telemetry lines to bedichek.org.
 
-#define HOSTNAME "poolcontrol"
+#define HOSTNAME "poolpumpcontrol"
+#define STATIC_IP IPAddress(192, 168, 1, 7)
+#define GATEWAY_IP IPAddress(192, 168, 1, 1)      // The AT&T gateway, also the DNS server
+#define SUBNET_MASK IPAddress(255, 255, 255, 0)
+#define DNS2_IP IPAddress(1, 1, 1, 1)
 #define INGEST_URL "https://bedichek.org/home/api/ingest/poolpumpcontrol"
 
 volatile bool eth_connected = false;
+bool status_served = false;              // Someone fetched /status since boot: the network works
 
 void network_event(arduino_event_id_t event, arduino_event_info_t info)
 {
@@ -1547,6 +1553,7 @@ void network_event(arduino_event_id_t event, arduino_event_info_t info)
     case ARDUINO_EVENT_ETH_START:
       ETH.setHostname(HOSTNAME);
       break;
+    case ARDUINO_EVENT_ETH_CONNECTED:   // The address is static, so link up means ready
     case ARDUINO_EVENT_ETH_GOT_IP:
       eth_connected = true;
       break;
@@ -1573,6 +1580,7 @@ static bool authorized(void)
 
 void handle_status(void)
 {
+  status_served = true;
   char pt1[8], pt2[8], ot[8];
   format_temperature(pool_temperature1_F, pt1, sizeof(pt1));
   format_temperature(pool_temperature2_F, pt2, sizeof(pt2));
@@ -1697,6 +1705,7 @@ void setup_network(void)
   Network.onEvent(network_event);
   SPI.begin(ETH_SCLK_PIN, ETH_MISO_PIN, ETH_MOSI_PIN);
   ETH.begin(ETH_PHY_W5500, 1, ETH_CS_PIN, ETH_INT_PIN, -1, SPI);
+  ETH.config(STATIC_IP, GATEWAY_IP, SUBNET_MASK, GATEWAY_IP, DNS2_IP);
 
   const char *headers[] = {"X-Token"};
   server.collectHeaders(headers, 1);
@@ -1753,7 +1762,8 @@ void upload_task(void *arg)
 
 /*****************************************************************************************************/
 // Firmware rollback.  Returning true here tells the core not to mark a new image good at boot; we do
-// it after a minute of running with the relay board answering.
+// it after a minute of running with the relay board answering and /status fetched over the network
+// (poolctl update polls it), so an image that can't be reached goes back to the old one by itself.
 
 bool verifyRollbackLater()
 {
@@ -1765,11 +1775,12 @@ void mark_firmware_good_callback(void)
   const esp_partition_t *running = esp_ota_get_running_partition();
   esp_ota_img_states_t state;
   if (esp_ota_get_state_partition(running, &state) == ESP_OK && state == ESP_OTA_IMG_PENDING_VERIFY) {
-    if (quad_lv_relay != nullptr) {
+    if (quad_lv_relay != nullptr && status_served) {
       esp_ota_mark_app_valid_cancel_rollback();
       out.println(F("# new firmware marked good"));
     } else {
-      out.println(F("# alert new firmware cannot reach the relay board; going back to the previous firmware"));
+      out.println(quad_lv_relay == nullptr ? F("# alert new firmware cannot reach the relay board; going back to the previous firmware")
+                                           : F("# alert new firmware was not reached over the network; going back to the previous firmware"));
       delay(500);
       esp_ota_mark_app_invalid_rollback_and_reboot();
     }
