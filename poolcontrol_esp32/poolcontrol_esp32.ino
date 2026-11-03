@@ -1765,7 +1765,7 @@ void upload_task(void *arg)
 // it after a minute of running with the relay board answering and /status fetched over the network
 // (poolctl update polls it), so an image that can't be reached goes back to the old one by itself.
 
-bool verifyRollbackLater()
+extern "C" bool verifyRollbackLater()   // C linkage, or the core keeps its own version, which marks every image good
 {
   return true;
 }
