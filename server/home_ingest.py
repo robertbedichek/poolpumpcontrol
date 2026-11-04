@@ -5,13 +5,15 @@ POST /home/api/ingest/<name> with "Authorization: Bearer <token>" and a text/pla
 each either a '#' comment or a data line starting with YYYY-MM-DD.  This replaces the gobble scripts
 on homecontrol, which appended the same lines over ssh.
 
-Lines containing "alert" are sent to Pushover, as gobble did, and a controller that has been heard
+Lines containing "alert" are sent to Pushover, as gobble did.  Those also containing "URGENT" go at high
+priority and by email, if the mail credential is present.  A a controller that has been heard
 from but goes quiet for SILENT_MINUTES is reported once.  Pushover is skipped if its credentials
 file is absent.
 
 Files (passed by systemd as credentials):
   tokens:   one "<name> <token>" per line
   pushover: "app_token <token>" and "user_token <token>" lines (optional)
+  mail:     "smtp_user <address>", "smtp_password <app password>", "mail_to <address>" lines (optional)
 """
 
 import fcntl
@@ -19,10 +21,12 @@ import hmac
 import json
 import os
 import re
+import smtplib
 import threading
 import time
 import urllib.parse
 import urllib.request
+from email.message import EmailMessage
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 DATA_DIR = "/var/www/html/home"
@@ -47,17 +51,36 @@ def read_pairs(env):
 
 TOKENS = read_pairs("INGEST_TOKENS")
 PUSHOVER = read_pairs("INGEST_PUSHOVER")
+MAIL = read_pairs("INGEST_MAIL")
 
 
-def pushover(message):
+def pushover(message, priority=0):
     if "app_token" not in PUSHOVER or "user_token" not in PUSHOVER:
         return
     data = urllib.parse.urlencode({"token": PUSHOVER["app_token"], "user": PUSHOVER["user_token"],
-                                   "message": message[:1000]}).encode()
+                                   "message": message[:1000], "priority": priority}).encode()
     try:
         urllib.request.urlopen("https://api.pushover.net/1/messages.json", data, timeout=10).read()
     except OSError as e:
         print(f"pushover failed: {e}", flush=True)
+
+
+def email(message):
+    if not all(k in MAIL for k in ("smtp_user", "smtp_password", "mail_to")):
+        print("urgent email skipped: no mail credential", flush=True)
+        return
+    msg = EmailMessage()
+    msg["Subject"] = "URGENT home alert: " + message[:120]
+    msg["From"] = MAIL["smtp_user"]
+    msg["To"] = MAIL["mail_to"]
+    msg.set_content(message)
+    try:
+        with smtplib.SMTP("smtp.gmail.com", 587, timeout=20) as server:
+            server.starttls()
+            server.login(MAIL["smtp_user"], MAIL["smtp_password"])
+            server.send_message(msg)
+    except (OSError, smtplib.SMTPException) as e:
+        print(f"urgent email failed: {type(e).__name__}", flush=True)
 
 
 def seen_path(name):
@@ -101,7 +124,10 @@ class Handler(BaseHTTPRequestHandler):
         mark_seen(name)
         for line in good:
             if "alert" in line.lower():
-                threading.Thread(target=pushover, args=(f"{name}: {line}",), daemon=True).start()
+                urgent = "urgent" in line.lower()
+                threading.Thread(target=pushover, args=(f"{name}: {line}", 1 if urgent else 0), daemon=True).start()
+                if urgent:
+                    threading.Thread(target=email, args=(f"{name}: {line}",), daemon=True).start()
         self.reply(200, f"ok {len(good)} of {len(lines)}")
 
     def log_message(self, fmt, *args):
