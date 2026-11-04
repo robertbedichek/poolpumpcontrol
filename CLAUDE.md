@@ -11,38 +11,40 @@ A pool pump and diverter valve controller that manages:
   24 VAC transformer via SSR, direction via relay)
 - Integration with the separate **solarthermal** controller, which requests water to the roof
 
-Since 2026-10-29 the controller is a **Waveshare ESP32-S3-POE-ETH-8DI-8DO** (`poolcontrol_esp32/`), on
-branch `esp32`. The original Arduino version (`poolpumpcontrol.ino`, SparkFun RedBoard, USB serial to
+The controller is a **Waveshare ESP32-S3-POE-ETH-8DI-8RO** (`poolcontrol_esp32/`, branch `esp32`), static
+**192.168.1.5**, since 2026-11-04 (flashed and bench tested; installed when Rob swaps it in). The
+**8DO** board it replaces ran the pool from 2026-10-29 at .7 and becomes `spare-waveshare-8DO`; its last firmware
+is commit 391f587. **This firmware must not run on an 8DO: the latch polarity is opposite and every output
+would turn on.** `poolctl update` refuses a board whose `/status` lacks `"board": "8RO"`. The original Arduino version (`poolpumpcontrol.ino`, SparkFun RedBoard, USB serial to
 homecontrol, gobble scripts) is kept for reference only; it is no longer running.
 
 ## Hardware (ESP32 version)
 
 | Part | Details |
 |---|---|
-| Main board | Waveshare ESP32-S3-POE-ETH-8DI-8DO: ESP32-S3 (16 MB flash, 8 MB PSRAM), W5500 Ethernet with 802.3af PoE, 8 isolated inputs, 8 isolated Darlington outputs (500 mA sink, built-in flyback diodes), PCF85063 RTC with CR1220 backup cell, isolated RS485 |
+| Main board | Waveshare ESP32-S3-POE-ETH-8DI-8RO: ESP32-S3 (16 MB flash, 8 MB PSRAM), W5500 Ethernet with 802.3af PoE, 8 isolated inputs, 8 SPDT relays, PCF85063 RTC, isolated RS485 |
 | Analog | Waveshare Modbus RTU Analog Input 8CH, address 1, 9600 8N1, on the RS485 port (A to A, B to B). Channel jumpers removed (voltage mode); the firmware sets data type 0 (0-5 V) on CH1-4 at start |
-| Network | PoE over the CAT5 run to the data closet PoE switch (the run used to carry USB over Ethernet). static **192.168.1.7** set in the firmware (`poolpumpcontrol` in /etc/hosts; solartracker and solarthermal will be .8 and .9), mDNS `poolpumpcontrol.local` |
+| Network | PoE over the CAT5 run to the data closet PoE switch (the run used to carry USB over Ethernet). static **192.168.1.5** set in the firmware (`poolpumpcontrol` in /etc/hosts; solartracker and solarthermal will be .8 and .9), mDNS `poolpumpcontrol.local` |
 | Sensor power | The existing 5 V buck converter; sensor grounds tied to the analog module's power ground |
 
-### Board pins (8DO variant)
+### Board pins
 RS485 TX 17, RX 18, **DE/RTS 21** (must be set up with `setPins(-1,-1,-1,21)` and
 `UART_MODE_RS485_HALF_DUPLEX`, or nothing is ever received; the 8RO wiki doesn't mention it). I2C SDA 42,
-SCL 41: TCA9554 0x20 (EXIO1-8 = DO1-8, **latch bit 0 = output on**), PCF85063 0x51. W5500 CS 16, INT 12,
+SCL 41: TCA9554 0x20 (EXIO1-8 = relays 1-8, **latch bit 1 = relay on**), PCF85063 0x51. W5500 CS 16, INT 12,
 SCLK 15, MOSI 13, MISO 14, RST 39. DI1-8 = GPIO4-11 (INPUT_PULLUP, low = active). RGB LED 38, buzzer 46.
 
 ### Wiring
 | Terminal | Connected to |
 |---|---|
-| DO1 | Main pump SSR (SSR + to +12 V, SSR - to DO1) |
-| DO2 | Boost pump SSR |
-| DO3 | Diverter 24 VAC transformer SSR |
-| DO4 | Diverter direction SPDT relay coil (+12 V to coil to DO4); **not installed yet** (issue), needed only for solar heating |
-| DO GND | 12 V supply negative. DO COM should go to +12 V for the flyback diodes (issue) |
-| DI1 | Mechanical timer switch, dry contact to the DI ground |
-| DI2 | Solarthermal pool-heat request: 12 VDC when asserted, + to DI2, - to the DI ground |
-| DI ground | **Isolated: only the timer switch and the solarthermal pair.** Do not tie it to the box's common ground; that bonds the box to solarthermal's ground over the 100'+ run (ground loop, noise; DI2 followed the timer switch while it was tied) |
+| Relay 1 | Main pump SSR: COM to 12 V negative, NO to SSR -, SSR + stays on +12 V |
+| Relay 2 | Boost pump SSR, same way |
+| Relay 3 | Diverter 24 VAC transformer SSR, same way |
+| Relay 4 | Diverter direction, no external relay: COM from the 24 VAC transformer, NO to the valve's roof leg, NC to its pool leg (energized = roof, as the old relay 4) |
+| DI1 | Mechanical timer switch, dry contact to DGND |
+| DI2 | Solarthermal pool-heat request: 12 VDC when asserted, + to DI2, - to DGND |
+| DGND | The inputs' common. **Not the terminal printed COM: with commons on COM all inputs read inactive (found on solarthermal, 2026-11-03).** **Isolated: only the timer switch and the solarthermal pair.** Do not tie it to the box's common ground; that bonds the box to solarthermal's ground over the 100'+ run (ground loop, noise; DI2 followed the timer switch while it was tied) |
 | Analog CH1, CH2 | Pool LM36s (same probe) |
-| Analog CH3 | Filter pressure sensor (about 0.27 V at 0 psi) |
+| Analog CH3 | Filter pressure sensor (about 0.29 V at 0 psi; near 0 V means dead or disconnected, and the firmware alerts after a minute) |
 | Analog CH4 | Outside LM36 |
 
 ## Software (`poolcontrol_esp32/poolcontrol_esp32.ino`)
@@ -92,7 +94,7 @@ poolctl flash [PORT]     # USB, first load only
 **All updates go over Ethernet** (`poolctl update`); there is no USB host at the pool. A new image must
 run a minute with the output expander answering **and have served `/status` over the network** (poolctl
 update polls it) before it is marked good, or the bootloader rolls back. If you change the address, fetch
-`/status` at the new address within that minute (`POOLCTL_HOST` points poolctl at the old one).
+`/status` at the new address within that minute (`POOLCTL_HOST` points poolctl at the old one). `POOLCTL_HOST=192.168.1.7` reaches the old 8DO for status and commands.
 
 Build: arduino-cli, FQBN `esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,PSRAM=opi,CDCOnBoot=cdc`,
 core esp32 3.3.x.

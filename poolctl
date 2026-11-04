@@ -10,7 +10,8 @@
   poolctl upload on|off       stream telemetry to bedichek.org (kept across restarts)
   poolctl + | - | button | telemetry | reboot
 
-The controller is http://poolpumpcontrol, 192.168.1.7 (set POOLCTL_HOST to override).  Its two tokens live in
+The controller is http://poolpumpcontrol, 192.168.1.5, an 8RO board (set POOLCTL_HOST to override).  `update` refuses
+any board whose /status doesn't say "board": "8RO": this firmware on the old 8DO board (.7) would turn every output on.  Its two tokens live in
 ~/.config/poolctl/: lan_token (commands and updates from the LAN) and ingest_token (its uploads to
 bedichek.org).  They are made on first use and compiled into the firmware; never print them.
 """
@@ -30,7 +31,7 @@ SKETCH = os.path.join(HERE, "poolcontrol_esp32")
 BUILD = os.path.join(HERE, "build")
 FQBN = ("esp32:esp32:esp32s3:FlashSize=16M,PartitionScheme=app3M_fat9M_16MB,"
         "PSRAM=opi,CDCOnBoot=cdc")
-HOST = os.environ.get("POOLCTL_HOST", "192.168.1.7")
+HOST = os.environ.get("POOLCTL_HOST", "192.168.1.5")
 CONF = os.path.expanduser("~/.config/poolctl")
 
 
@@ -84,6 +85,8 @@ def command(text):
 
 
 def update():
+    if '"board": "8RO"' not in request("/status"):
+        sys.exit(f"poolctl: {HOST} doesn't report an 8RO board; this firmware would turn every output on on an 8DO")
     binary = build()
     boundary = uuid.uuid4().hex
     body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"firmware\"; "

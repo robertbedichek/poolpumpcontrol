@@ -2,14 +2,16 @@
 /*
   This controls a pool pump and a diverter valve.
 
-  ESP32-S3 port of poolpumpcontrol.ino, for the Waveshare ESP32-S3-POE-ETH-8DI-8DO (8 isolated Darlington
-  outputs, 500 mA sink each, behind a TCA9554 I2C expander, 8 isolated digital inputs, W5500 Ethernet with
-  PoE, PCF85063 RTC, isolated RS485)
+  ESP32-S3 port of poolpumpcontrol.ino, for the Waveshare ESP32-S3-POE-ETH-8DI-8RO (8 SPDT relays behind a
+  TCA9554 I2C expander, 8 isolated digital inputs, W5500 Ethernet with PoE, PCF85063 RTC, isolated RS485)
   plus a Waveshare Modbus RTU Analog Input 8CH on the RS485 port.  The control logic is the Arduino
   version's, unchanged; only the I/O, the clock and the telemetry path are new:
 
-  - Outputs DO1-4 replace the Qwiic quad relay board, in the same order.  DO1-3 drive the pump and
-    transformer SSRs directly; DO4 drives an external SPDT relay for the diverter direction.
+  - Relays 1-4 replace the Qwiic quad relay board, in the same order.  Relays 1-3 switch the pump and
+    transformer SSR inputs; relay 4's contacts switch the diverter motor's 24 VAC directly (NO = roof,
+    NC = pool), so there is no external direction relay.
+  - The last firmware for the 8DO board (latch bit 0 = on) is commit 391f587.  This one must not run on
+    an 8DO: there it would turn every output on.  poolctl update checks /status for "board": "8RO".
   - DI1 is the timer switch, DI2 the diverter request from solarthermal.  The LCD, the four keys and
     the red button are gone; the poolctl command (or the USB serial console) replaces them.
   - The analog module's channels 1-4 replace A0-A3, in the same order, read in millivolts.
@@ -54,11 +56,11 @@ time_t arduino_time;
 bool time_valid = false;
 
 /*****************************************************************************************************/
-// Board pins (Waveshare wiki and demo code for the ESP32-S3-POE-ETH-8DI-8DO)
+// Board pins (Waveshare wiki and demo code for the ESP32-S3-POE-ETH-8DI-8RO)
 
 #define I2C_SDA_PIN      (42)
 #define I2C_SCL_PIN      (41)
-#define TCA9554_ADDR     (0x20)   // Output expander: EXIO1..8 = DO1..8, bit clear = output on (sinking)
+#define TCA9554_ADDR     (0x20)   // Relay expander: EXIO1..8 = relays 1..8, bit set = relay energized
 #define PCF85063_ADDR    (0x51)   // RTC
 
 #define ETH_CS_PIN       (16)
@@ -81,7 +83,7 @@ bool time_valid = false;
 #define LV_RELAY_MAIN_PUMP_12V            (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
 #define LV_RELAY_BOOST_PUMP_12V           (2)     // For the boost pump relay coil
 #define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)     // When energized, this powers the SSR that controls power to the 24VAC transformer
-#define LV_RELAY_DIVERTER_DIRECTION       (4)     // When this and the 24VAC transformer are enabled, this drives the diverter valve to roof mode.
+#define LV_RELAY_DIVERTER_DIRECTION       (4)     // COM from the 24VAC transformer, NO to the valve's roof leg, NC to its pool leg.  Energized = roof.
 
 class Onboard_Relays {
 public:
@@ -181,6 +183,7 @@ float outside_temperature_F = SENSOR_ERROR;
 float pressure_psi;
 uint16_t analog_last_mv[4];    // Latest raw reading of each channel, for /status
 
+#define PRESSURE_SENSOR_MIN_MV (100)    // Below this the pressure sensor is dead or disconnected
 const float max_pressure_sending_water_to_pool = 23.0;
 const float max_pressure_sending_water_to_roof = 25.0;
 
@@ -915,9 +918,9 @@ void monitor_diverter_valve_callback(void)
 
 /*****************************************************************************************************/
 // Output expander (TCA9554).  Register 1 is the output latch, register 3 the direction (1 = input).
-// A latch bit of 0 turns its output on; `bits` holds the logical on/off state, the latch its inverse.
+// A latch bit of 1 energizes its relay (the opposite of the 8DO board), so `bits` is the latch.
 // The expander keeps its state through an ESP32 reset (e.g. a firmware update), so the pumps keep
-// running; after a power-up all pins are inputs, pulled up, and every output is off.
+// running; after a power-up all pins are inputs and every relay is released.
 
 static bool tca_write(uint8_t reg, uint8_t value)
 {
@@ -945,19 +948,19 @@ bool Onboard_Relays::begin(void)
     return false;
   }
   if (direction == 0x00) {          // Already set up: keep the relays as they are
-    bits = ~latch & 0xFF;
+    bits = latch;
     out.print(F("# relays kept through reset: 0x"));
     out.println(bits, HEX);
     return true;
   }
   bits = 0;
-  return tca_write(1, 0xFF) && tca_write(3, 0x00);
+  return tca_write(1, 0x00) && tca_write(3, 0x00);
 }
 
 void Onboard_Relays::set(uint8_t relay, bool on)
 {
   uint8_t b = on ? (bits | (1 << (relay - 1))) : (bits & ~(1 << (relay - 1)));
-  if (tca_write(1, ~b & 0xFF)) {
+  if (tca_write(1, b)) {
     bits = b;
   } else {
     out.print(F("# alert relay board did not answer setting relay "));
@@ -973,12 +976,12 @@ bool Onboard_Relays::verify(void)
   if (latch < 0 || direction < 0) {
     return false;
   }
-  if (latch != (~bits & 0xFF) || direction != 0x00) {
+  if (latch != bits || direction != 0x00) {
     out.print(F("# alert relay latch was 0x"));
     out.print(latch, HEX);
     out.print(F(", rewriting 0x"));
-    out.println(~bits & 0xFF, HEX);
-    tca_write(1, ~bits & 0xFF);
+    out.println(bits, HEX);
+    tca_write(1, bits);
     tca_write(3, 0x00);
   }
   return true;
@@ -1253,6 +1256,25 @@ void read_time_and_sensor_inputs_callback(void)
 
   if (outside_temperature_F < 0.0 || outside_temperature_F > 150.0) {
     outside_temperature_F = SENSOR_ERROR;
+  }
+  // The sensor reads about 0.29 V with no pressure, so near zero volts means it is dead or disconnected.
+  // Overpressure can't be seen then, and the boost pump won't start.  (It failed silently from
+  // 2026-11-02 until someone noticed the missing boost runs.)
+  {
+    static unsigned long last_sensor_ok = millis();
+    static bool sensor_alerted = false;
+    if (pressure_millivolts >= PRESSURE_SENSOR_MIN_MV) {
+      last_sensor_ok = millis();
+      if (sensor_alerted) {
+        out.println(F("# alert pressure sensor reading again"));
+        sensor_alerted = false;
+      }
+    } else if (!sensor_alerted && (millis() - last_sensor_ok) > 60 * 1000UL) {
+      out.print(F("# alert pressure sensor reads "));
+      out.print((int)pressure_millivolts);
+      out.println(F(" mV, 290 expected at rest: boost pump can't run, overpressure can't be seen"));
+      sensor_alerted = true;
+    }
   }
   float pressure_volts = pressure_millivolts / 1000.0;
   pressure_volts -= 0.29;   // Pressure sensor reads 0.29 volts when pressure is zero
@@ -1533,12 +1555,12 @@ void setup_time(void)
 }
 
 /*****************************************************************************************************/
-// Network: Ethernet (W5500, powered over PoE), static address 192.168.1.7 (poolpumpcontrol in
-// /etc/hosts; solartracker and solarthermal get .8 and .9), mDNS name poolpumpcontrol.local, a small
+// Network: Ethernet (W5500, powered over PoE), static address 192.168.1.5 (poolpumpcontrol in
+// /etc/hosts; solartracker and solarthermal are .8 and .9), mDNS name poolpumpcontrol.local, a small
 // HTTP server for poolctl, and an upload task that sends telemetry lines to bedichek.org.
 
 #define HOSTNAME "poolpumpcontrol"
-#define STATIC_IP IPAddress(192, 168, 1, 7)
+#define STATIC_IP IPAddress(192, 168, 1, 5)
 #define GATEWAY_IP IPAddress(192, 168, 1, 1)      // The AT&T gateway, also the DNS server
 #define SUBNET_MASK IPAddress(255, 255, 255, 0)
 #define DNS2_IP IPAddress(1, 1, 1, 1)
@@ -1598,6 +1620,7 @@ void handle_status(void)
   String s;
   s.reserve(1200);
   s += "{\n";
+  s += "  \"board\": \"8RO\",\n";
   s += "  \"time\": \"" + String(when) + "\",\n";
   s += "  \"time_valid\": " + String(time_valid ? "true" : "false") + ",\n";
   s += "  \"mode\": \"" + String(operating_mode_to_string(operating_mode)) + "\",\n";
@@ -1611,6 +1634,7 @@ void handle_status(void)
   s += "  \"timer_switch\": " + String(timer_switch_on) + ", \"diverter_request\": " + String(diverter_valve_request()) + ",\n";
   s += "  \"manual_request\": " + String(manual_main_pump_request) + ", \"periodic_filter\": " + String(periodic_filter_request) +
        ", \"periodic_boost\": " + String(periodic_boost_request) + ",\n";
+  s += "  \"relays\": " + String(quad_lv_relay != nullptr ? tca_read(1) : -1) + ", \"relay_direction_reg\": " + String(quad_lv_relay != nullptr ? tca_read(3) : -1) + ",\n";
   s += "  \"relay_board\": " + String(quad_lv_relay != nullptr ? "true" : "false") +
        ", \"analog_module\": " + String(analog_failures < 20 ? "true" : "false") + ",\n";
   s += "  \"analog_mv\": [" + String(analog_last_mv[0]) + ", " + String(analog_last_mv[1]) + ", " +
