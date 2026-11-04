@@ -7,8 +7,8 @@
   plus a Waveshare Modbus RTU Analog Input 8CH on the RS485 port.  The control logic is the Arduino
   version's, unchanged; only the I/O, the clock and the telemetry path are new:
 
-  - Relays 1-4 replace the Qwiic quad relay board, in the same order.  Relays 1-3 switch the pump and
-    transformer SSR inputs; relay 4's contacts switch the diverter motor's 24 VAC directly (NO = roof,
+  - Relays 1-3 and 5 replace the Qwiic quad relay board.  Relays 1-3 switch the pump and
+    transformer SSR inputs; relay 5's contacts switch the diverter motor's 24 VAC directly (NO = roof,
     NC = pool), so there is no external direction relay.
   - The last firmware for the 8DO board (latch bit 0 = on) is commit 391f587.  This one must not run on
     an 8DO: there it would turn every output on.  poolctl update checks /status for "board": "8RO".
@@ -83,7 +83,7 @@ bool time_valid = false;
 #define LV_RELAY_MAIN_PUMP_12V            (1)     // When energized, this relay sends 12VDC to the coil of the 240VAC contactor that powers the pool pump
 #define LV_RELAY_BOOST_PUMP_12V           (2)     // For the boost pump relay coil
 #define LV_RELAY_DIVERTER_TRANSFORMER_12V (3)     // When energized, this powers the SSR that controls power to the 24VAC transformer
-#define LV_RELAY_DIVERTER_DIRECTION       (4)     // COM from the 24VAC transformer, NO to the valve's roof leg, NC to its pool leg.  Energized = roof.
+#define LV_RELAY_DIVERTER_DIRECTION       (5)     // COM from the 24VAC transformer, NO to the valve's roof leg, NC to its pool leg.  Energized = roof.
 
 class Onboard_Relays {
 public:

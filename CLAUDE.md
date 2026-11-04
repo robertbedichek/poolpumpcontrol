@@ -39,7 +39,7 @@ SCLK 15, MOSI 13, MISO 14, RST 39. DI1-8 = GPIO4-11 (INPUT_PULLUP, low = active)
 | Relay 1 | Main pump SSR: COM to 12 V negative, NO to SSR -, SSR + stays on +12 V |
 | Relay 2 | Boost pump SSR, same way |
 | Relay 3 | Diverter 24 VAC transformer SSR, same way |
-| Relay 4 | Diverter direction, no external relay: COM from the 24 VAC transformer, NO to the valve's roof leg, NC to its pool leg (energized = roof, as the old relay 4) |
+| Relay 5 | Diverter direction, no external relay: COM from the 24 VAC transformer, NO to the valve's roof leg, NC to its pool leg (energized = roof, as the old quad board's relay 4) |
 | DI1 | Mechanical timer switch, dry contact to DGND |
 | DI2 | Solarthermal pool-heat request: 12 VDC when asserted, + to DI2, - to DGND |
 | DGND | The inputs' common. **Not the terminal printed COM: with commons on COM all inputs read inactive (found on solarthermal, 2026-11-03).** **Isolated: only the timer switch and the solarthermal pair.** Do not tie it to the box's common ground; that bonds the box to solarthermal's ground over the 100'+ run (ground loop, noise; DI2 followed the timer switch while it was tied) |
