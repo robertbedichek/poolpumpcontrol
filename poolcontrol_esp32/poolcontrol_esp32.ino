@@ -2,6 +2,9 @@
 /*
   This controls a pool pump and a diverter valve.
 
+  This branch (esp32-8do) is for the spare 8DO board at 192.168.1.7, spare-waveshare-8DO.  The pool itself
+  runs the 8RO board, branch esp32, at 192.168.1.5.  Uploads stay off unless turned on.
+
   ESP32-S3 port of poolpumpcontrol.ino, for the Waveshare ESP32-S3-POE-ETH-8DI-8DO (8 isolated Darlington
   outputs, 500 mA sink each, behind a TCA9554 I2C expander, 8 isolated digital inputs, W5500 Ethernet with
   PoE, PCF85063 RTC, isolated RS485)
@@ -1537,7 +1540,7 @@ void setup_time(void)
 // /etc/hosts; solartracker and solarthermal get .8 and .9), mDNS name poolpumpcontrol.local, a small
 // HTTP server for poolctl, and an upload task that sends telemetry lines to bedichek.org.
 
-#define HOSTNAME "poolpumpcontrol"
+#define HOSTNAME "spare-waveshare-8DO"
 #define STATIC_IP IPAddress(192, 168, 1, 7)
 #define GATEWAY_IP IPAddress(192, 168, 1, 1)      // The AT&T gateway, also the DNS server
 #define SUBNET_MASK IPAddress(255, 255, 255, 0)
@@ -1598,6 +1601,7 @@ void handle_status(void)
   String s;
   s.reserve(1200);
   s += "{\n";
+  s += "  \"board\": \"8DO\",\n";
   s += "  \"time\": \"" + String(when) + "\",\n";
   s += "  \"time_valid\": " + String(time_valid ? "true" : "false") + ",\n";
   s += "  \"mode\": \"" + String(operating_mode_to_string(operating_mode)) + "\",\n";
