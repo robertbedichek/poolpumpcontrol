@@ -12,8 +12,10 @@
     NC = pool), so there is no external direction relay.
   - The last firmware for the 8DO board (latch bit 0 = on) is commit 391f587.  This one must not run on
     an 8DO: there it would turn every output on.  poolctl update checks /status for "board": "8RO".
-  - DI1 is the timer switch, DI2 the diverter request from solarthermal.  The LCD, the four keys and
-    the red button are gone; the poolctl command (or the USB serial console) replaces them.
+  - DI1 is the timer switch.  The diverter request from solarthermal comes over the network (POST /solar),
+    no longer on DI2: see "Pool-heat request" below.
+  - The LCD, the four keys and the red button are gone; the poolctl command (or the USB serial console)
+    replaces them.
   - The analog module's channels 1-4 replace A0-A3, in the same order, read in millivolts.
   - Time comes from NTP and is kept in the RTC, so there is no more time correction from homecontrol.
   - Telemetry lines go to the USB serial port, to a ring buffer served at /log, and over HTTPS to
@@ -43,7 +45,7 @@
 #include <esp_ota_ops.h>
 #include <esp_sntp.h>
 
-#include "secrets.h"  // POOL_LAN_TOKEN and POOL_INGEST_TOKEN, written by poolctl; not in git
+#include "secrets.h"  // POOL_LAN_TOKEN, POOL_INGEST_TOKEN and POOL_PEER_TOKEN, written by poolctl; not in git
 
 #define FIRMWARE_VERSION __DATE__ " " __TIME__
 
@@ -109,7 +111,7 @@ Scheduler ts;
 // Speed of the USB serial console
 #define SERIAL_BAUD (115200)
 
-typedef enum {m_normal, m_pump, m_boost, m_24vac, m_diverter, m_last} operating_mode_t;
+typedef enum {m_normal, m_pump, m_boost, m_24vac, m_diverter, m_solartest, m_last} operating_mode_t;
 
 void read_time_and_sensor_inputs_callback(void);
 
@@ -196,7 +198,6 @@ Task read_time_and_sensor_inputs(500, TASK_FOREVER, &read_time_and_sensor_inputs
 #define OUTSIDE_TEMPERATURE_CHANNEL (3)     // An LM36 sensing ambient temperature near the pool equipment
 
 #define TIMER_SWITCH_INPUT_PIN      (DI1_PIN)   // Mechanical timer switch on outside of house
-#define DIVERTER_REQUEST_INPUT_PIN  (DI2_PIN)   // Contact driven by the 'solarthermal' controller
 
 bool timer_switch_on;
 
@@ -375,10 +376,12 @@ void format_temperature(float temp_F, char *buf, size_t buf_size) {
   }
 }
 
+// The modes' names in commands ("mode solartest") and in /solar replies
+const char *mode_names[] = {"normal", "pump", "boost", "24vac", "diverter", "solartest"};
+
 const char *operating_mode_to_string(operating_mode_t operating_mode)
 {
-  // m_pump, m_diverter
-  const char *s[] = {"Normal", "Main P", "Boost ", "24 VAC", "Divert"};
+  const char *s[] = {"Normal", "Main P", "Boost ", "24 VAC", "Divert", "SolTst"};
   if (operating_mode < m_last) {
     return s[operating_mode];
   }
@@ -398,9 +401,16 @@ void monitor_diag_mode_callback(void)
   }
 }
 
+// Pool-heat request.  solarthermal asks over the network (POST /solar with "on" or "off") instead of the old 12 V
+// pair on DI2.  An "on" holds for SOLAR_REQUEST_LEASE_MS and solarthermal renews it every 30 s, so if the renewals
+// stop (network down, solarthermal resetting) the request ends by itself and the usual drain-down follows.
+#define SOLAR_REQUEST_LEASE_MS (90 * 1000UL)
+bool solar_request_on;                  // Last word from solarthermal was "on"
+unsigned long solar_request_time;       // millis() of solarthermal's last "on" or "off"
+
 bool diverter_valve_request()
 {
-  return digitalRead(DIVERTER_REQUEST_INPUT_PIN) == LOW;
+  return solar_request_on && (millis() - solar_request_time) < SOLAR_REQUEST_LEASE_MS;
 }
 
 // What the plus and minus keys did in the diag modes; now the '+' and '-' commands.
@@ -896,6 +906,24 @@ void monitor_boost_pump_callback(void)
 void monitor_diverter_valve_callback(void)
 {
   check_free_memory(F("monitor_diverter_valve"));
+  if (solar_request_on && !diverter_valve_request()) {
+    solar_request_on = false;
+    out.println(F("# alert pool-heat request from solarthermal lapsed: no renewal for 90 s"));
+  }
+  if (operating_mode == m_solartest) {
+    // Test mode: the request moves the diverter (straight back to pool when it ends; nothing is pumping, so there
+    // is nothing to drain), and the pumps are left alone.
+    bool want_roof = diverter_valve_request();
+    if (want_roof != diverter_valve_is_sending_water_to_roof()) {
+      turn_diverter_valve_transformer_on();
+      if (want_roof) {
+        set_diverter_valve_to_send_water_to_roof();
+      } else {
+        set_diverter_valve_to_return_water_to_pool();
+      }
+      out.println(want_roof ? F("# solartest: diverter to roof") : F("# solartest: diverter to pool"));
+    }
+  }
   if (operating_mode == m_normal) {
     // If the main pump has been off for two minutes and the diverter valve is set to send
     // water to the roof, we assume that the panels have had time to drain and we
@@ -906,6 +934,8 @@ void monitor_diverter_valve_callback(void)
         set_diverter_valve_to_return_water_to_pool();
       }
     }
+  }
+  if (operating_mode == m_normal || operating_mode == m_solartest) {
     if (diverter_valve_transformer_is_on()) {
       if ((millis() - diverter_valve_transformer_on_time) > max_diverter_power_on_time) {
         turn_diverter_valve_transformer_off();
@@ -1375,7 +1405,9 @@ void emit_telemetry_callback(void)
 
 /*****************************************************************************************************/
 // Commands, from the USB serial console or from poolctl (POST /cmd).  One per line:
-//   mode normal|pump|boost|24vac|diverter    enter a mode; diag modes revert to Normal after 10 minutes
+//   mode normal|pump|boost|24vac|diverter|solartest
+//                                            enter a mode; diag modes revert to Normal after 10 minutes.  In
+//                                            solartest, solarthermal's request moves the diverter but never the pumps
 //   + / -                                    what the plus and minus keys did in the diag modes
 //   button                                   what the red button did: toggle the main pump
 //   telemetry                                emit a telemetry line now
@@ -1389,14 +1421,13 @@ void run_command(const char *command)
   force_telemetry++;
 
   if (strncmp(command, "mode ", 5) == 0) {
-    const char *names[] = {"normal", "pump", "boost", "24vac", "diverter"};
     for (int m = 0; m < m_last; m++) {
-      if (strcmp(command + 5, names[m]) == 0) {
+      if (strcmp(command + 5, mode_names[m]) == 0) {
         set_operating_mode((operating_mode_t)m);
         return;
       }
     }
-    out.println(F("# modes are normal, pump, boost, 24vac, diverter"));
+    out.println(F("# modes are normal, pump, boost, 24vac, diverter, solartest"));
   } else if (strcmp(command, "+") == 0 || strcmp(command, "on") == 0) {
     plus_key();
     if (operating_mode != m_normal) {
@@ -1425,7 +1456,7 @@ void run_command(const char *command)
   } else {
     out.print(F("# Unknown command: "));
     out.println(command);
-    out.println(F("# choices are: 'mode normal|pump|boost|24vac|diverter', +, -, button, telemetry, 'upload on|off', reboot"));
+    out.println(F("# choices are: 'mode normal|pump|boost|24vac|diverter|solartest', +, -, button, telemetry, 'upload on|off', reboot"));
   }
 }
 
@@ -1631,7 +1662,8 @@ void handle_status(void)
   s += "  \"boost_pump\": " + String(boost_pump_is_on()) + ",\n";
   s += "  \"valve\": \"" + String(diverter_valve_is_sending_water_to_roof() ? "roof" : "pool") + "\", \"valve_roof_s\": " + String(roof_s) +
        ", \"valve_power\": " + String(diverter_valve_transformer_is_on()) + ",\n";
-  s += "  \"timer_switch\": " + String(timer_switch_on) + ", \"diverter_request\": " + String(diverter_valve_request()) + ",\n";
+  s += "  \"timer_switch\": " + String(timer_switch_on) + ", \"diverter_request\": " + String(diverter_valve_request()) +
+       ", \"solar_request_age_s\": " + String(solar_request_time == 0 ? -1L : (long)((millis() - solar_request_time) / 1000)) + ",\n";
   s += "  \"manual_request\": " + String(manual_main_pump_request) + ", \"periodic_filter\": " + String(periodic_filter_request) +
        ", \"periodic_boost\": " + String(periodic_boost_request) + ",\n";
   s += "  \"relays\": " + String(quad_lv_relay != nullptr ? tca_read(1) : -1) + ", \"relay_direction_reg\": " + String(quad_lv_relay != nullptr ? tca_read(3) : -1) + ",\n";
@@ -1676,6 +1708,41 @@ void handle_cmd(void)
   recent_lines.copy_tail(s, recent_lines.length() > before ? recent_lines.length() - before : 0);
   xSemaphoreGive(lines_mutex);
   server.send(200, "text/plain", s);
+}
+
+// solarthermal's pool-heat request: POST /solar with body "on" or "off" and X-Token POOL_PEER_TOKEN (shared by the
+// two controllers).  The reply is one line of what the pool is doing, for solarthermal to check, e.g.
+//   accepted=1 request=1 mode=normal valve=roof valve_power=1 main_pump=1 boost_pump=0 psi=12.3
+// accepted=0 means this controller is in a diag mode and isn't acting on requests; the request is still recorded,
+// and acted on when the mode returns to Normal.
+void handle_solar(void)
+{
+  if (server.header("X-Token") != POOL_PEER_TOKEN) {
+    server.send(403, "text/plain", "forbidden\n");
+    return;
+  }
+  String c = server.arg("plain");
+  c.trim();
+  if (c != "on" && c != "off") {
+    server.send(400, "text/plain", "body must be on or off\n");
+    return;
+  }
+  bool on = c == "on";
+  if (on != solar_request_on || (on && !diverter_valve_request())) {
+    out.println(on ? F("# pool-heat request from solarthermal: on") : F("# pool-heat request from solarthermal: off"));
+  }
+  solar_request_on = on;
+  solar_request_time = millis();
+  if (solar_request_time == 0) {
+    solar_request_time = 1;    // 0 means "never" in /status
+  }
+  bool accepted = operating_mode == m_normal || operating_mode == m_solartest;
+  char reply[160];
+  snprintf(reply, sizeof(reply), "accepted=%d request=%d mode=%s valve=%s valve_power=%d main_pump=%d boost_pump=%d psi=%.1f\n",
+           accepted, diverter_valve_request(), mode_names[operating_mode],
+           diverter_valve_is_sending_water_to_roof() ? "roof" : "pool", diverter_valve_transformer_is_on(),
+           main_pump_is_on(), boost_pump_is_on(), pressure_psi);
+  server.send(200, "text/plain", reply);
 }
 
 // Firmware update: poolctl posts the .bin as multipart form data.  The control tasks don't run while
@@ -1737,6 +1804,7 @@ void setup_network(void)
   server.on("/", HTTP_GET, handle_status);
   server.on("/log", HTTP_GET, handle_log);
   server.on("/cmd", HTTP_POST, handle_cmd);
+  server.on("/solar", HTTP_POST, handle_solar);
   server.on("/update", HTTP_POST, handle_update_done, handle_update_upload);
   server.begin();
   MDNS.begin(HOSTNAME);
